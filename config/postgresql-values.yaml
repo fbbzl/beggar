@@ -1,0 +1,37 @@
+# 3-node PostgreSQL HA for Harbor metadata (Bitnami postgresql-ha)
+# Deploys: 1 primary + 2 replicas + pgpool for read/write splitting
+
+postgresql:
+  replicaCount: 3
+  password: "harbordb123"
+  repmgrUsername: "repmgr"
+  repmgrPassword: "repmgr123"
+  postgresqlUsername: "harbor"
+  postgresqlDatabase: "harbor"
+  postgresqlPostgresPassword: "postgres123"
+  pgHbaTrust:
+    - "host all all 0.0.0.0/0 trust"
+  extraEnv:
+    - name: PGOPTIONS
+      value: "-c max_connections=200"
+
+pgpool:
+  replicaCount: 2
+  adminPassword: "pgpool123"
+  loadBalancingMode: "slave"
+  extraEnv:
+    - name: PGPOOL_BACKEND_CONNECTION_TIMEOUT
+      value: "30"
+
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClass: ""
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 1Gi
+    cpu: 500m

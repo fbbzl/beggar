@@ -1,0 +1,38 @@
+# 3-node TDengine cluster
+# Minimal available cluster with mnode replication
+
+replicaCount: 3
+
+image:
+  tag: "3.3.0.1"
+
+storage:
+  data:
+    size: 20Gi
+  log:
+    size: 5Gi
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 1Gi
+    cpu: 500m
+
+config:
+  # 3 mnode for HA
+  numOfMnodes: 3
+  # Minimum quorum
+  replication: 3
+  # Support time range queries
+  timezone: "Asia/Shanghai"
+  # Cluster configuration
+  firstEp: "tdengine-0.tdengine-headless:6030"
+  fqdn: "tdengine-0.tdengine-headless"
+  serverPort: 6030
+  supportVnodes: 128
+
+service:
+  type: ClusterIP
+  headless: true

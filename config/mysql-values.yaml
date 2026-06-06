@@ -1,0 +1,48 @@
+# 3-node MySQL for general-purpose use (Bitnami mysql)
+# 1 primary + 2 replicas, semi-sync replication
+
+architecture: replication
+
+auth:
+  rootPassword: "mysqlroot123"
+  replicationUser: "repl"
+  replicationPassword: "repl123"
+  database: "appdb"
+  username: "appuser"
+  password: "appuser123"
+
+primary:
+  replicaCount: 1
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 500m
+
+secondary:
+  replicaCount: 2
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 500m
+
+# Semi-sync replication for data safety
+semiSync:
+  enabled: true
+  replicaLagThreshold: 30
+  timeout: 10000
+  waitPoint: AFTER_SYNC
+  masterDelay: 0
+  masterWaitForReplicaCount: 1
+  masterWaitTimeout: 10000

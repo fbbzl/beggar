@@ -1,0 +1,25 @@
+# 3-node Elasticsearch cluster (Elastic official chart)
+# Minimum master nodes: 2 (quorum for 3-node cluster)
+
+clusterName: "elasticsearch"
+nodeGroup: "data"
+replicas: 3
+minimumMasterNodes: 2
+
+imageTag: "8.13.0"
+
+esJavaOpts: "-Xmx1g -Xms1g"
+
+resources:
+  requests:
+    memory: 1Gi
+    cpu: 200m
+  limits:
+    memory: 2Gi
+    cpu: 1
+
+volumeClaimTemplate:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 30Gi

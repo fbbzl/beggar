@@ -1,0 +1,31 @@
+# 3-node Redis with Sentinel HA (Bitnami redis)
+# 3 sentinel nodes + 1 primary + 2 replica Redis nodes
+
+architecture: replication
+
+auth:
+  enabled: true
+  password: "redispass123"
+  sentinel: true
+  existingSecret: ""
+
+replica:
+  replicaCount: 3
+
+sentinel:
+  enabled: true
+  masterSet: "mymaster"
+  quorum: 2
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: ""
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: 300m

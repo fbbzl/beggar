@@ -1,0 +1,62 @@
+# Apollo 3-node cluster
+# Uses external MySQL (deployed by registry-stack)
+
+configService:
+  replicaCount: 3
+  image:
+    tag: "2.3.0"
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: 500m
+
+adminService:
+  replicaCount: 3
+  image:
+    tag: "2.3.0"
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 1Gi
+      cpu: 500m
+
+portal:
+  enabled: true
+  replicaCount: 2
+  image:
+    tag: "2.3.0"
+  service:
+    type: NodePort
+    nodePort: 30007
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 300m
+
+db:
+  host: "mysql-mysql-primary"
+  port: 3306
+  username: "root"
+  password: "mysqlroot123"
+
+configDb:
+  url: "jdbc:mysql://mysql-mysql-primary:3306/ApolloConfigDB?characterEncoding=utf8&useSSL=false"
+  username: "root"
+  password: "mysqlroot123"
+
+portalDb:
+  url: "jdbc:mysql://mysql-mysql-primary:3306/ApolloPortalDB?characterEncoding=utf8&useSSL=false"
+  username: "root"
+  password: "mysqlroot123"

@@ -1,0 +1,40 @@
+# 3-node Nacos cluster
+# Uses external MySQL (deployed by registry-stack)
+
+replicaCount: 3
+image:
+  repository: nacos/nacos-server
+  tag: "2.4.0"
+
+serverMode: cluster
+
+db:
+  master:
+    host: "mysql-mysql-primary"
+    port: 3306
+    username: "root"
+    password: "mysqlroot123"
+  slave:
+    host: "mysql-mysql-primary"
+    port: 3306
+    username: "root"
+    password: "mysqlroot123"
+  dbName: "nacos"
+  param: "characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useSSL=false"
+
+# Generate unique peer nodes for cluster membership
+cluster:
+  member:
+    list: "nacos-0.nacos-headless:8848,nacos-1.nacos-headless:8848,nacos-2.nacos-headless:8848"
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 200m
+  limits:
+    memory: 1Gi
+    cpu: 1

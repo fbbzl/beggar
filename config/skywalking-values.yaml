@@ -1,0 +1,35 @@
+# 3-node SkyWalking OAP cluster
+# Uses external Elasticsearch for storage
+
+oap:
+  replicas: 3
+  image:
+    tag: "9.7.0"
+  storageType: elasticsearch
+  env:
+    SW_CORE_GRPC_SSL: "false"
+    SW_STORAGE_ES_CLUSTER_NODES: "elasticsearch-master:9200"
+    SW_CORE_RECORD_DATA_TTL: "3"
+    SW_CORE_METRICS_DATA_TTL: "7"
+    SW_HEALTH_CHECKER: "default"
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 200m
+    limits:
+      memory: 2Gi
+      cpu: 1
+  javaOpts: "-Xmx512M -Xms512M"
+
+ui:
+  enabled: true
+  image:
+    tag: "9.7.0"
+  ingress:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30006
+
+elasticsearch:
+  enabled: false

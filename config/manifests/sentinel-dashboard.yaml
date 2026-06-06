@@ -1,0 +1,84 @@
+---
+# 2-node Sentinel Dashboard
+# Supports app rule push via dynamic data source
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-config
+data:
+  application.properties: |
+    server.port=8080
+    sentinel.dashboard.version=2.0.0
+    # Persistent rules via file (optional)
+    # sentinel.dashboard.app.hideAppsNoMachineMillis=0
+    # sentinel.dashboard.removeAppWhenMachineOfflineMillis=0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentinel-dashboard
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sentinel-dashboard
+  template:
+    metadata:
+      labels:
+        app: sentinel-dashboard
+    spec:
+      containers:
+        - name: sentinel
+          image: "sentinel-dashboard:latest"
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8719
+              name: api
+          env:
+            - name: JAVA_OPTS
+              value: "-Dserver.port=8080 -Dsentinel.dashboard.auth.username=sentinel -Dsentinel.dashboard.auth.password=sentinel123 -Djava.security.egd=file:/dev/./urandom"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/sentinel
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 1Gi
+              cpu: 500m
+      volumes:
+        - name: config
+          configMap:
+            name: sentinel-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinel-dashboard
+spec:
+  type: NodePort
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30008
+      name: http
+    - port: 8719
+      targetPort: 8719
+      nodePort: 30009
+      name: api
+  selector:
+    app: sentinel-dashboard

@@ -1,0 +1,9 @@
+# PowerShell temp files
+*.tmp
+
+# Helm values temp files
+temp/
+
+# OS
+.DS_Store
+Thumbs.db

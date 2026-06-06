@@ -1,0 +1,67 @@
+# Harbor configuration with external PostgreSQL + Redis + PVC storage
+# Use --set to override: expose.type, ingress host, s3 storage
+
+expose:
+  type: nodePort
+  tls:
+    enabled: false
+  nodePort:
+    ports:
+      http:
+        nodePort: 30002
+      https:
+        nodePort: 30003
+  ingress:
+    hosts:
+      core: registry.local
+
+harborAdminPassword: "Harbor12345"
+secretKey: "not-a-secure-key"
+
+database:
+  type: external
+  external:
+    host: "pg-postgresql-ha-pgpool"
+    port: 5432
+    username: "harbor"
+    password: "harbordb123"
+    coreDatabase: "harbor"
+    notaryServerDatabase: "notary_server"
+    notarySignerDatabase: "notary_signer"
+    sslMode: "disable"
+
+redis:
+  type: external
+  external:
+    addr: "redis-redis:6379"
+    password: "redispass123"
+
+persistence:
+  type: filesystem
+  imageChartStorage:
+    type: filesystem
+    filesystem:
+      rootdirectory: /storage
+  persistentVolumeClaim:
+    registry:
+      size: 100Gi
+    jobservice:
+      jobLog: 10Gi
+      scanDataExports: 1Gi
+    chartmuseum:
+      size: 10Gi
+    trivy:
+      size: 10Gi
+  database:
+    existingClaim: ""
+  redis:
+    existingClaim: ""
+
+components:
+  jobservice:
+    maxJobWorkers: 10
+  trivy:
+    enabled: true
+
+metrics:
+  enabled: true

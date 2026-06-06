@@ -1,0 +1,38 @@
+# 3-node Kafka KRaft mode (no ZooKeeper)
+# 3 combined controller+broker nodes
+
+extraConfig: |
+  auto.create.topics.enable = true
+  delete.topic.enable = true
+  num.partitions = 3
+  default.replication.factor = 3
+  min.insync.replicas = 2
+
+controller:
+  replicaCount: 3
+
+broker:
+  replicaCount: 3
+
+provisioning:
+  enabled: false
+
+listeners:
+  client:
+    protocol: PLAINTEXT
+  controller:
+    protocol: PLAINTEXT
+  interbroker:
+    protocol: PLAINTEXT
+
+persistence:
+  enabled: true
+  size: 20Gi
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 200m
+  limits:
+    memory: 2Gi
+    cpu: 1

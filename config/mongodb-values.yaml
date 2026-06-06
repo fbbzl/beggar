@@ -1,0 +1,29 @@
+# 3-node MongoDB replica set
+# Auto-configures replica set with rs0
+
+architecture: replicaset
+
+replicaSetName: rs0
+replicaCount: 3
+
+auth:
+  enabled: true
+  rootPassword: "mongoroot123"
+  database: "appdb"
+  username: "appuser"
+  password: "appuser123"
+
+persistence:
+  enabled: true
+  size: 20Gi
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 1Gi
+    cpu: 500m
+
+arbiter:
+  enabled: false

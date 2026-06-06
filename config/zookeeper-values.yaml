@@ -1,0 +1,31 @@
+# 3-node ZooKeeper ensemble
+# TickTime=2000, initLimit=10, syncLimit=5, quorum=2
+
+replicaCount: 3
+
+minServerId: 1
+maxClientCnxns: 60
+tickTime: 2000
+initLimit: 10
+syncLimit: 5
+globalOutstandingLimit: 1000
+preAllocSize: 65536
+snapCount: 100000
+commitLogCount: 500
+snapSizeLimitInGb: 2
+
+fourLetterCommands: "srvr,stat,mntr,ruok,conf"
+
+persistence:
+  enabled: true
+  size: 10Gi
+  dataLogDir:
+    size: 10Gi
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: 500m
