@@ -112,7 +112,16 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 14 | ⏱ **TDengine** | `--tdengine` | `-Tdengine` | 3 | TDengine | 时序数据库 |
 | 15 | 🔀 **ShardingSphere** | `--shardingsphere` | `-Shardingsphere` | 2 | Apache | MySQL 多主分库 |
 | 16 | 🏛 **Harbor** | `--harbor` | `-Harbor` | - | Harbor CNCF | 企业级镜像仓库 |
-| 17 | 🎯 **全部** | `--all` | `-WithAll` | - | - | 一键全量部署 |
+| 18 | 🔗 **ShenYu** | `--shenyu` | `-Shenyu` | 2+2 | Apache | API 网关 + 管理控制台 |
+| 19 | 🔌 **Dubbo** | `--dubbo` | `-Dubbo` | 2 | Apache | RPC 框架管理端（依赖 ZK） |
+| 20 | 📋 **Seata** | `--seata` | `-Seata` | 2 | Apache | 分布式事务（file 模式） |
+| 21 | ⏰ **XXL-JOB** | `--xxl-job` | `-XxlJob` | 2 | xuxueli | 分布式调度中心（依赖 MySQL） |
+| 22 | 📊 **Prometheus+Grafana** | `--prometheus` | `-Prometheus` | 1+1 | Prometheus/Grafana | 监控告警栈 |
+| 23 | 💬 **Pulsar** | `--pulsar` | `-Pulsar` | 3+1 | Apache | 云原生消息队列 |
+| 24 | 🌊 **Flink** | `--flink` | `-Flink` | 1+2 | Apache | 流计算引擎 |
+| 25 | 🏗️ **Jenkins** | `--jenkins` | `-Jenkins` | 1 | Jenkins | CI/CD 持续集成 |
+| 26 | 🟢 **Spring Boot Admin** | `--spring-boot-admin` | `-Sba` | 2 | codecentric | Spring Boot 应用监控 |
+| 27 | 🎯 **全部** | `--all` | `-WithAll` | - | - | 一键全量部署 |
 
 > 💡 MySQL、PostgreSQL、Redis、MinIO 使用**官方镜像**，无 Bitnami 拉取限制，国内用户友好。
 
@@ -149,7 +158,13 @@ beggar/
     │   ├── minio.yaml                      # MinIO 对象存储
     │   ├── rocketmq.yaml                   # RocketMQ 3+3
     │   ├── sentinel-dashboard.yaml         # Sentinel 控制台
-    │   └── shardingsphere.yaml             # ShardingSphere 多主分库
+    │   ├── shardingsphere.yaml             # ShardingSphere 多主分库
+    │   ├── dubbo-admin.yaml               # Dubbo-Admin（依赖 ZK）
+    │   ├── seata.yaml                     # Seata 分布式事务
+    │   ├── xxl-job.yaml                   # XXL-JOB 调度中心
+    │   ├── xxl-job-init.sql               # XXL-JOB 初始化 SQL
+    │   ├── flink.yaml                     # Flink 会话集群
+    │   └── spring-boot-admin.yaml         # Spring Boot 监控
     ├── harbor-values.yaml            # Harbor Helm 配置
     ├── kafka-values.yaml             # Kafka KRaft 配置
     ├── elasticsearch-values.yaml     # Elasticsearch 配置
@@ -158,7 +173,11 @@ beggar/
     ├── zookeeper-values.yaml         # ZooKeeper 配置
     ├── skywalking-values.yaml        # SkyWalking 配置（依赖 ES）
     ├── apollo-values.yaml            # Apollo 配置（依赖 MySQL）
-    └── tdengine-values.yaml          # TDengine 配置
+    ├── tdengine-values.yaml          # TDengine 配置
+    ├── shenyu-values.yaml            # ShenYu 网关配置
+    ├── prometheus-values.yaml        # Prometheus+Grafana 配置
+    ├── pulsar-values.yaml            # Pulsar 消息队列配置
+    └── jenkins-values.yaml           # Jenkins CI/CD 配置
 ```
 
 ---

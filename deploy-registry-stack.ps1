@@ -20,6 +20,15 @@ param(
     [switch]$Tdengine,                       # TDengine 3-node
     [switch]$Harbor,                         # Harbor 镜像库 + PG + Redis
     [switch]$Shardingsphere,                 # ShardingSphere 多主分库
+    [switch]$Shenyu,                         # ShenYu API 网关
+    [switch]$Dubbo,                          # Dubbo-Admin
+    [switch]$Seata,                          # Seata 分布式事务
+    [switch]$XxlJob,                         # XXL-JOB 分布式调度
+    [switch]$Prometheus,                     # Prometheus + Grafana
+    [switch]$Pulsar,                         # Apache Pulsar
+    [switch]$Flink,                          # Apache Flink
+    [switch]$Jenkins,                        # Jenkins CI/CD
+    [switch]$Sba, [switch]$SpringBootAdmin,  # Spring Boot Admin
     [switch]$All,                            # 全部
     [switch]$WithIngress,                    # 启用 Ingress
     [switch]$DryRun                          # 校验不真跑
@@ -30,21 +39,26 @@ if ($Postgresql) { $Pg = $true }
 if ($Elasticsearch) { $Es = $true }
 if ($Mongodb) { $Mongo = $true }
 if ($Zookeeper) { $Zk = $true }
+if ($SpringBootAdmin) { $Sba = $true }
 
 # ── All 快捷 ──
 if ($All) {
     $Pg = $Mysql = $Redis = $MinIO = $Kafka = $Es = $Mongo = $Zk = $true
     $Nacos = $RocketMQ = $Sentinel = $Skywalking = $Apollo = $Tdengine = $Harbor = $Shardingsphere = $true
+    $Shenyu = $Dubbo = $Seata = $XxlJob = $Prometheus = $Pulsar = $Flink = $Jenkins = $Sba = $true
 }
 
 # ── 依赖自动推导 ──
-if ($Nacos)  { $Mysql = $true }
-if ($Apollo) { $Mysql = $true }
-if ($Harbor) { $Pg = $true; $Redis = $true }
+if ($Nacos)   { $Mysql = $true }
+if ($Apollo)  { $Mysql = $true }
+if ($Harbor)  { $Pg = $true; $Redis = $true }
+if ($Dubbo)   { $Zk = $true }
+if ($XxlJob)  { $Mysql = $true }
 
 # ── 无参数 → 帮助 ──
 $any = $Pg -or $Mysql -or $Redis -or $MinIO -or $Kafka -or $Es -or $Mongo -or $Zk `
-     -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor -or $Shardingsphere
+     -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor -or $Shardingsphere `
+     -or $Shenyu -or $Dubbo -or $Seata -or $XxlJob -or $Prometheus -or $Pulsar -or $Flink -or $Jenkins -or $Sba
 if (-not $any) {
     Write-Host @"
 用法: .\deploy-registry-stack.ps1 [选项]
@@ -65,6 +79,15 @@ if (-not $any) {
   -MinIO              MinIO 对象存储
   -Harbor             Harbor 镜像库 (+PG+Redis)
   -Shardingsphere     ShardingSphere 多主分库 (+3xMySQL)
+  -Shenyu             Apache ShenYu API 网关
+  -Dubbo              Apache Dubbo-Admin (+ZK)
+  -Seata              Apache Seata 分布式事务
+  -XxlJob             XXL-JOB 分布式调度 (+MySQL)
+  -Prometheus         Prometheus + Grafana 监控栈
+  -Pulsar             Apache Pulsar 消息队列
+  -Flink              Apache Flink 流计算
+  -Jenkins            Jenkins CI/CD
+  -Sba | -SpringBootAdmin Spring Boot Admin 应用监控
   -All                全部
   -WithIngress        启用 Ingress (默认 NodePort)
   -DryRun             校验配置不实际部署
@@ -128,6 +151,10 @@ helm repo add nacos-group https://nacos-group.github.io/nacos-helm 2>$null | Out
 helm repo add apache https://apache.jfrog.io/artifactory/skywalking-helm 2>$null | Out-Null
 helm repo add apolloconfig https://apolloconfig.github.io/apollo-helm 2>$null | Out-Null
 helm repo add tdengine https://tdengine.github.io/helm-charts 2>$null | Out-Null
+helm repo add shenyu https://apache.github.io/shenyu-helm-chart 2>$null | Out-Null
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>$null | Out-Null
+helm repo add apachepulsar https://pulsar.apache.org/charts 2>$null | Out-Null
+helm repo add jenkins https://charts.jenkins.io 2>$null | Out-Null
 helm repo update 2>$null | Out-Null
 ok "Repos"
 
@@ -159,6 +186,22 @@ if ($Sentinel)   { step "--- Sentinel ---"; kubeApply "$CFG/manifests/sentinel-d
 if ($Skywalking) { step "--- SkyWalking ---"; hlm "skywalking" "apache/skywalking-helm" "$CFG/skywalking-values.yaml" $null }
 if ($Tdengine)   { step "--- TDengine ---"; hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml" $null }
 if ($Shardingsphere) { step "--- ShardingSphere ---"; kubeApply "$CFG/manifests/shardingsphere.yaml" }
+
+if ($Shenyu)     { step "--- ShenYu ---"; hlm "shenyu" "shenyu/shenyu" "$CFG/shenyu-values.yaml" $null }
+if ($Dubbo)      { step "--- Dubbo-Admin ---"; kubeApply "$CFG/manifests/dubbo-admin.yaml" }
+if ($Seata)      { step "--- Seata ---"; kubeApply "$CFG/manifests/seata.yaml" }
+if ($XxlJob)     { step "--- XXL-JOB ---"
+    $mysqlPod = kubectl get pod -n $Namespace -l "app.kubernetes.io/component=primary" -o jsonpath='{.items[0].metadata.name}' 2>$null
+    if ($mysqlPod) {
+        Get-Content "$CFG/manifests/xxl-job-init.sql" -Raw | kubectl exec -i -n $Namespace $mysqlPod -- mysql -uroot -pmysqlroot123 2>$null | Out-Null
+    }
+    kubeApply "$CFG/manifests/xxl-job.yaml"
+}
+if ($Prometheus) { step "--- Prometheus+Grafana ---"; hlm "prometheus" "prometheus-community/kube-prometheus-stack" "$CFG/prometheus-values.yaml" $null }
+if ($Pulsar)     { step "--- Pulsar ---"; hlm "pulsar" "apachepulsar/pulsar" "$CFG/pulsar-values.yaml" @("--timeout", "15m") }
+if ($Flink)      { step "--- Flink ---"; kubeApply "$CFG/manifests/flink.yaml" }
+if ($Jenkins)    { step "--- Jenkins ---"; hlm "jenkins" "jenkins/jenkins" "$CFG/jenkins-values.yaml" $null }
+if ($Sba)        { step "--- Spring Boot Admin ---"; kubeApply "$CFG/manifests/spring-boot-admin.yaml" }
 
 if ($Harbor) {
     step "--- Harbor ---"
@@ -197,6 +240,15 @@ if ($Skywalking){ Write-Host "  SkyWalking : skywalking-oap.$Namespace.svc:11800
 if ($Apollo)    { Write-Host "  Apollo     : apollo-apollo-portal.$Namespace.svc:8070 (apollo / admin)" -ForegroundColor Green }
 if ($Tdengine)  { Write-Host "  TDengine   : tdengine.$Namespace.svc:6030 (root / taosdata)" -ForegroundColor Green }
 if ($Shardingsphere) { Write-Host "  ShardingSphere : shardingsphere-proxy.$Namespace.svc:3307 (MySQL协议)" -ForegroundColor Green }
+if ($Shenyu)  { Write-Host "  ShenYu     : shenyu-admin.$Namespace.svc:31095 (admin / 123456)" -ForegroundColor Green }
+if ($Dubbo)   { Write-Host "  Dubbo-Admin: dubbo-admin.$Namespace.svc:8081 (root / root)" -ForegroundColor Green }
+if ($Seata)   { Write-Host "  Seata      : seata-server.$Namespace.svc:8091 (file模式)" -ForegroundColor Green }
+if ($XxlJob)  { Write-Host "  XXL-JOB    : xxl-job-admin.$Namespace.svc:8080 (admin / 123456)" -ForegroundColor Green }
+if ($Prometheus) { Write-Host "  Prometheus : prometheus-operated.$Namespace.svc:9090" -ForegroundColor Green }
+if ($Pulsar)  { Write-Host "  Pulsar     : pulsar-broker.$Namespace.svc:6650" -ForegroundColor Green }
+if ($Flink)   { Write-Host "  Flink      : flink-jobmanager.$Namespace.svc:8081" -ForegroundColor Green }
+if ($Jenkins) { Write-Host "  Jenkins    : jenkins.$Namespace.svc:8080 (admin / admin123)" -ForegroundColor Green }
+if ($Sba)     { Write-Host "  Spring Boot Admin: spring-boot-admin.$Namespace.svc:8080" -ForegroundColor Green }
 if ($MinIO)     { Write-Host "  MinIO      : minio.$Namespace.svc:9000 (minioadmin / minioadmin)" -ForegroundColor Green }
 if ($Harbor)    { if ($WithIngress) { Write-Host "  Harbor     : http://$IngressDomain (admin / $AdminPassword)" -ForegroundColor Green } else { Write-Host "  Harbor     : http://${nodeIP}:30002 (admin / $AdminPassword)" -ForegroundColor Green } }
 

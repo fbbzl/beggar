@@ -1,0 +1,14 @@
+controller:
+  adminUser: admin
+  adminPassword: admin123
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+  serviceType: ClusterIP
+  servicePort: 8080
+persistence:
+  enabled: false

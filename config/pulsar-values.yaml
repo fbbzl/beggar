@@ -1,0 +1,27 @@
+initialize: true
+affinity:
+  anti_affinity: false
+volumes:
+  persistence: false
+components:
+  autorecovery: false
+  pulsar_manager: false
+  functions: false
+zookeeper:
+  replicaCount: 1
+bookkeeper:
+  replicaCount: 1
+  configData:
+    dbStorage_writeCacheMaxSizeMb: "32"
+    dbStorage_readAheadCacheMaxSizeMb: "32"
+    dbStorage_rocksDB_writeBufferSizeMB: "8"
+    dbStorage_rocksDB_blockCacheSize: "8388608"
+broker:
+  replicaCount: 1
+  configData:
+    autoSkipNonRecoverableData: "true"
+    managedLedgerDefaultEnsembleSize: "1"
+    managedLedgerDefaultWriteQuorum: "1"
+    managedLedgerDefaultAckQuorum: "1"
+proxy:
+  replicaCount: 1

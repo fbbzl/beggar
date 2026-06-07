@@ -30,7 +30,8 @@ CFG="$SCRIPT_DIR/config"
 
 # ── 全部组件初始 OFF ──
 PG=; MYSQL=; REDIS=; MINIO=; KAFKA=; ES=; MONGO=; ZK=;
-NACOS=; ROCKETMQ=; SENTINEL=; SKYWALKING=; APOLLO=; TDENGINE=; HARBOR=; SHARDINGSPHERE=; ALL=
+NACOS=; ROCKETMQ=; SENTINEL=; SKYWALKING=; APOLLO=; TDENGINE=; HARBOR=; SHARDINGSPHERE=
+SHENYU=; DUBBO=; SEATA=; XXL_JOB=; PROMETHEUS=; PULSAR=; FLINK=; JENKINS=; SBA=; ALL=
 
 # ── 参数解析 ──
 while [ $# -gt 0 ]; do
@@ -51,6 +52,16 @@ while [ $# -gt 0 ]; do
     --minio)            MINIO=1 ;;
     --harbor)           HARBOR=1 ;;
     --shardingsphere)   SHARDINGSPHERE=1 ;;
+    --shenyu)           SHENYU=1 ;;
+    --dubbo)            DUBBO=1 ;;
+    --seata)            SEATA=1 ;;
+    --xxl-job)          XXL_JOB=1 ;;
+    --prometheus)       PROMETHEUS=1 ;;
+    --pulsar)           PULSAR=1 ;;
+    --flink)            FLINK=1 ;;
+    --jenkins)          JENKINS=1 ;;
+    --spring-boot-admin) SBA=1 ;;
+    -sba)               SBA=1 ;;
     --all)              ALL=1 ;;
     --ingress)          WITH_INGRESS=1 ;;
     --domain)           INGRESS_DOMAIN="$2"; shift ;;
@@ -74,6 +85,15 @@ while [ $# -gt 0 ]; do
       echo "  --minio             MinIO 对象存储"
       echo "  --harbor            Harbor 镜像库 (+PG+Redis)"
       echo "  --shardingsphere    ShardingSphere 多主分库 (+3xMySQL)"
+      echo "  --shenyu            Apache ShenYu API 网关 (+admin+bootstrap)"
+      echo "  --dubbo             Apache Dubbo-Admin (+ZK)"
+      echo "  --seata             Apache Seata 分布式事务 (file模式)"
+      echo "  --xxl-job           XXL-JOB 分布式调度 (+MySQL)"
+      echo "  --prometheus        Prometheus + Grafana 监控栈"
+      echo "  --pulsar            Apache Pulsar 消息队列"
+      echo "  --flink             Apache Flink 流计算"
+      echo "  --jenkins           Jenkins CI/CD"
+      echo "  --spring-boot-admin | -sba Spring Boot Admin 应用监控"
       echo "  --all               全部"
       echo "  --ingress           启用 Ingress (默认 NodePort)"
       echo "  --domain <d>        Ingress 域名 (默认 registry.local)"
@@ -89,15 +109,18 @@ done
 
 # ── --all 快捷 ──
 [ -n "$ALL" ] && PG=1 MYSQL=1 REDIS=1 MINIO=1 KAFKA=1 ES=1 MONGO=1 ZK=1 \
-    NACOS=1 ROCKETMQ=1 SENTINEL=1 SKYWALKING=1 APOLLO=1 TDENGINE=1 HARBOR=1 SHARDINGSPHERE=1
+    NACOS=1 ROCKETMQ=1 SENTINEL=1 SKYWALKING=1 APOLLO=1 TDENGINE=1 HARBOR=1 SHARDINGSPHERE=1 \
+    SHENYU=1 DUBBO=1 SEATA=1 XXL_JOB=1 PROMETHEUS=1 PULSAR=1 FLINK=1 JENKINS=1 SBA=1
 
 # ── 依赖自动推导 ──
 [ -n "$NACOS" ]   && MYSQL=1    # Nacos 需要 MySQL
 [ -n "$APOLLO" ]  && MYSQL=1    # Apollo 需要 MySQL
 [ -n "$HARBOR" ]  && PG=1 REDIS=1  # Harbor 需要 PG + Redis
+[ -n "$DUBBO" ]   && ZK=1       # Dubbo 需要 ZK 作为注册中心
+[ -n "$XXL_JOB" ] && MYSQL=1    # XXL-JOB 需要 MySQL
 
 # ── 无参数 → 显示帮助 ──
-if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE" ]; then
+if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE$SHENYU$DUBBO$SEATA$XXL_JOB$PROMETHEUS$PULSAR$FLINK$JENKINS$SBA" ]; then
   echo "请指定要部署的组件，例如: bash $0 --mysql"
   echo "查看全部选项: bash $0 --help"
   exit 1
@@ -149,7 +172,11 @@ fi
 step "添加 Helm Repo"
 for r in bitnami:https://charts.bitnami.com/bitnami elastic:https://helm.elastic.co harbor:https://helm.goharbor.io \
          nacos-group:https://nacos-group.github.io/nacos-helm apache:https://apache.jfrog.io/artifactory/skywalking-helm \
-         apolloconfig:https://apolloconfig.github.io/apollo-helm tdengine:https://tdengine.github.io/helm-charts; do
+         apolloconfig:https://apolloconfig.github.io/apollo-helm tdengine:https://tdengine.github.io/helm-charts \
+         shenyu:https://apache.github.io/shenyu-helm-chart \
+         prometheus-community:https://prometheus-community.github.io/helm-charts \
+         apachepulsar:https://pulsar.apache.org/charts \
+         jenkins:https://charts.jenkins.io; do
   helm repo add "${r%%:*}" "${r#*:}" 2>/dev/null || true
 done
 helm repo update 2>/dev/null || true
@@ -225,6 +252,47 @@ kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/
 [ -n "$SHARDINGSPHERE" ] && step "--- ShardingSphere-Proxy 多主分库 ---" && \
   kube_apply "$CFG/manifests/shardingsphere.yaml"
 
+# -- API 网关 --
+[ -n "$SHENYU" ] && step "--- ShenYu 网关 ---" && \
+  hlm "shenyu" "shenyu/shenyu" "$CFG/shenyu-values.yaml"
+
+# -- RPC 框架 --
+[ -n "$DUBBO" ] && step "--- Dubbo-Admin ---" && \
+  kube_apply "$CFG/manifests/dubbo-admin.yaml"
+
+# -- 分布式事务 --
+[ -n "$SEATA" ] && step "--- Seata ---" && \
+  kube_apply "$CFG/manifests/seata.yaml"
+
+# -- 分布式调度 --
+[ -n "$XXL_JOB" ] && step "--- XXL-JOB ---" && {
+  MYSQL_POD=$(kubectl get pod -n "$NAMESPACE" -l "app.kubernetes.io/component=primary" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -n "$MYSQL_POD" ]; then
+    kubectl exec -i -n "$NAMESPACE" "$MYSQL_POD" -- mysql -uroot -pmysqlroot123 < "$CFG/manifests/xxl-job-init.sql" 2>/dev/null || true
+  fi
+  kube_apply "$CFG/manifests/xxl-job.yaml"
+}
+
+# -- 监控 --
+[ -n "$PROMETHEUS" ] && step "--- Prometheus + Grafana ---" && \
+  hlm "prometheus" "prometheus-community/kube-prometheus-stack" "$CFG/prometheus-values.yaml"
+
+# -- 消息队列 --
+[ -n "$PULSAR" ] && step "--- Pulsar ---" && \
+  hlm "pulsar" "apachepulsar/pulsar" "$CFG/pulsar-values.yaml" "--timeout 15m"
+
+# -- 流计算 --
+[ -n "$FLINK" ] && step "--- Flink ---" && \
+  kube_apply "$CFG/manifests/flink.yaml"
+
+# -- CI/CD --
+[ -n "$JENKINS" ] && step "--- Jenkins ---" && \
+  hlm "jenkins" "jenkins/jenkins" "$CFG/jenkins-values.yaml"
+
+# -- 应用监控 --
+[ -n "$SBA" ] && step "--- Spring Boot Admin ---" && \
+  kube_apply "$CFG/manifests/spring-boot-admin.yaml"
+
 # -- 镜像库 --
 if [ -n "$HARBOR" ]; then
   step "--- Harbor ---"
@@ -264,6 +332,15 @@ echo ""
 [ -n "$SKYWALKING" ] && echo "  SkyWalking : skywalking-oap.$NAMESPACE.svc:11800"
 [ -n "$TDENGINE" ] && echo "  TDengine   : tdengine.$NAMESPACE.svc:6030 (root / taosdata)"
 [ -n "$SHARDINGSPHERE" ] && echo "  ShardingSphere : shardingsphere-proxy.$NAMESPACE.svc:3307 (MySQL协议)"
+[ -n "$SHENYU" ]  && echo "  ShenYu     : shenyu-admin.$NAMESPACE.svc:31095 (admin / 123456)"
+[ -n "$DUBBO" ]   && echo "  Dubbo-Admin: dubbo-admin.$NAMESPACE.svc:8081 (root / root)"
+[ -n "$SEATA" ]   && echo "  Seata      : seata-server.$NAMESPACE.svc:8091 (file模式)"
+[ -n "$XXL_JOB" ] && echo "  XXL-JOB    : xxl-job-admin.$NAMESPACE.svc:8080 (admin / 123456)"
+[ -n "$PROMETHEUS" ] && echo "  Prometheus : prometheus-operated.$NAMESPACE.svc:9090"
+[ -n "$PULSAR" ]  && echo "  Pulsar     : pulsar-broker.$NAMESPACE.svc:6650"
+[ -n "$FLINK" ]   && echo "  Flink      : flink-jobmanager.$NAMESPACE.svc:8081"
+[ -n "$JENKINS" ] && echo "  Jenkins    : jenkins.$NAMESPACE.svc:8080 (admin / admin123)"
+[ -n "$SBA" ]     && echo "  Spring Boot Admin: spring-boot-admin.$NAMESPACE.svc:8080"
 [ -n "$HARBOR" ] && {
   [ -n "$WITH_INGRESS" ] && echo "  Harbor     : http://$INGRESS_DOMAIN (admin / $ADMIN_PASS)" \
     || echo "  Harbor     : http://${NODE_IP}:30002 (admin / $ADMIN_PASS)"

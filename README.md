@@ -115,7 +115,16 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 14 | ⏱ **TDengine** | `--tdengine` | `-Tdengine` | 3 | TDengine | Time-series database |
 | 15 | 🔀 **ShardingSphere** | `--shardingsphere` | `-Shardingsphere` | 2 | Apache | MySQL sharding |
 | 16 | 🏛 **Harbor** | `--harbor` | `-Harbor` | - | Harbor CNCF | Image registry |
-| 17 | 🎯 **All** | `--all` | `-WithAll` | - | - | Deploy everything |
+| 18 | 🔗 **ShenYu** | `--shenyu` | `-Shenyu` | 2+2 | Apache | API gateway + admin |
+| 19 | 🔌 **Dubbo** | `--dubbo` | `-Dubbo` | 2 | Apache | RPC admin console (+ZK) |
+| 20 | 📋 **Seata** | `--seata` | `-Seata` | 2 | Apache | Distributed transactions |
+| 21 | ⏰ **XXL-JOB** | `--xxl-job` | `-XxlJob` | 2 | xuxueli | Distributed scheduler (+MySQL) |
+| 22 | 📊 **Prometheus+Grafana** | `--prometheus` | `-Prometheus` | 1+1 | Prometheus/Grafana | Monitoring stack |
+| 23 | 💬 **Pulsar** | `--pulsar` | `-Pulsar` | 3+1 | Apache | Cloud-native messaging |
+| 24 | 🌊 **Flink** | `--flink` | `-Flink` | 1+2 | Apache | Stream processing |
+| 25 | 🏗️ **Jenkins** | `--jenkins` | `-Jenkins` | 1 | Jenkins | CI/CD |
+| 26 | 🟢 **Spring Boot Admin** | `--spring-boot-admin` | `-Sba` | 2 | codecentric | App monitoring |
+| 27 | 🎯 **All** | `--all` | `-WithAll` | - | - | Deploy everything |
 
 > 💡 MySQL, PostgreSQL, Redis, MinIO use **official Docker images** — no Bitnami pull limits.
 
@@ -152,7 +161,13 @@ beggar/
     │   ├── minio.yaml                      # MinIO object storage
     │   ├── rocketmq.yaml                   # RocketMQ 3+3
     │   ├── sentinel-dashboard.yaml         # Sentinel dashboard
-    │   └── shardingsphere.yaml             # ShardingSphere proxy
+    │   ├── shardingsphere.yaml             # ShardingSphere proxy
+    │   ├── dubbo-admin.yaml               # Dubbo-Admin (+ZK)
+    │   ├── seata.yaml                     # Seata distributed TX
+    │   ├── xxl-job.yaml                   # XXL-JOB scheduler
+    │   ├── xxl-job-init.sql               # XXL-JOB SQL init
+    │   ├── flink.yaml                     # Flink session cluster
+    │   └── spring-boot-admin.yaml         # SBA app monitoring
     ├── harbor-values.yaml            # Harbor Helm config
     ├── kafka-values.yaml             # Kafka KRaft config
     ├── elasticsearch-values.yaml     # Elasticsearch config
@@ -161,7 +176,11 @@ beggar/
     ├── zookeeper-values.yaml         # ZooKeeper config
     ├── skywalking-values.yaml        # SkyWalking config (needs ES)
     ├── apollo-values.yaml            # Apollo config (needs MySQL)
-    └── tdengine-values.yaml          # TDengine config
+    ├── tdengine-values.yaml          # TDengine config
+    ├── shenyu-values.yaml            # ShenYu gateway config
+    ├── prometheus-values.yaml        # Prometheus+Grafana config
+    ├── pulsar-values.yaml            # Pulsar messaging config
+    └── jenkins-values.yaml           # Jenkins CI/CD config
 ```
 
 ---
