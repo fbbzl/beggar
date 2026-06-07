@@ -1,191 +1,119 @@
 # Beggar - 一键部署 K8s 集群 + 中间件全家桶
 
-从裸机到完整的中间件集群，**一条命令全搞定**。
-
 ## 环境要求
 
 | 工具 | 版本 | 用途 |
 |------|------|------|
-| PowerShell Core `pwsh` | 7.0+ | 脚本运行环境（Linux 需安装，Windows 自带） |
 | `kubectl` | 1.23+ | K8s 操作 |
 | `helm` | 3.8+ | 中间件包管理 |
-| `Docker` | 20+ | k3d 本地集群模式需要 |
+| `Docker` | 20+ | k3d 本地集群需要 |
 
-**Linux 安装 pwsh：**
+## 快速开始
+
+### 🐧 Linux
+
 ```bash
-# Ubuntu/Debian
-curl -fsSL https://aka.ms/install-powershell | bash
+# 1. 起本地 K3s 集群 (3节点, 需要 Docker)
+bash deploy-k8s-cluster.sh k3d
 
-# 验证
-pwsh --version
+# 2. 一键部署全部中间件
+bash deploy-registry-stack.sh --all
+
+# 按需组合
+bash deploy-registry-stack.sh --kafka --es --nacos --skywalking
+
+# 先校验不真跑
+DRY_RUN=1 bash deploy-registry-stack.sh --all
 ```
 
-**所有脚本用 pwsh 执行：**
+**K3s 原生 HA（3台物理机）：**
 ```bash
-pwsh ./deploy-k8s-cluster.ps1 -WithK3d
-pwsh ./deploy-registry-stack.ps1 -WithAll
+NODE_IPS=10.0.0.1,10.0.0.2,10.0.0.3 bash deploy-k8s-cluster.sh k3s
+bash deploy-registry-stack.sh --all
 ```
 
-## 架构全景
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    deploy-k8s-cluster.ps1                 │
-│              一键部署 K3s HA 集群 (3节点)                  │
-├─────────────────────────────────────────────────────────┤
-│                    deploy-registry-stack.ps1              │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │  Layer 1: 基础设施                                │    │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────┐  │    │
-│  │  │PostgreSQL│ │  MySQL  │ │  Redis  │ │MinIO │  │    │
-│  │  │  3-node │ │ 3-node  │ │ 3-node  │ │(opt) │  │    │
-│  │  └─────────┘ └─────────┘ └─────────┘ └──────┘  │    │
-│  ├─────────────────────────────────────────────────┤    │
-│  │  Layer 2: 存储 & 协调                             │    │
-│  │  ┌──────────────┐ ┌────────┐ ┌────────────┐    │    │
-│  │  │ Elasticsearch│ │MongoDB │ │ ZooKeeper  │    │    │
-│  │  │   3-node     │ │3-node  │ │  3-node    │    │    │
-│  │  └──────────────┘ └────────┘ └────────────┘    │    │
-│  ├─────────────────────────────────────────────────┤    │
-│  │  Layer 3: 消息                                   │    │
-│  │  ┌───────────┐ ┌──────────────────────┐        │    │
-│  │  │   Kafka   │ │     RocketMQ         │        │    │
-│  │  │3-node KRaft│ │ 3NS + 3Broker       │        │    │
-│  │  └───────────┘ └──────────────────────┘        │    │
-│  ├─────────────────────────────────────────────────┤    │
-│  │  Layer 4: 注册/配置/治理                          │    │
-│  │  ┌─────────┐ ┌─────────┐ ┌────────────┐       │    │
-│  │  │  Nacos  │ │  Apollo │ │Sentinel Dash│       │    │
-│  │  │ 3-node  │ │ 3-node  │ │  2-node    │       │    │
-│  │  └─────────┘ └─────────┘ └────────────┘       │    │
-│  ├─────────────────────────────────────────────────┤    │
-│  │  Layer 5: 可观测性                               │    │
-│  │  ┌────────────┐ ┌───────────┐                  │    │
-│  │  │  SkyWalking│ │  Harbor   │                  │    │
-│  │  │ OAP 3-node │ │ 镜像库    │                  │    │
-│  │  └────────────┘ └───────────┘                  │    │
-│  ├─────────────────────────────────────────────────┤    │
-│  │  Layer 6: 时序                                  │    │
-│  │  ┌───────────┐                                  │    │
-│  │  │  TDengine │                                  │    │
-│  │  │  3-node   │                                  │    │
-│  │  └───────────┘                                  │    │
-│  └─────────────────────────────────────────────────┘    │
-│                                                          │
-│  所有中间件 ≥3节点，防脑裂                                  │
-└─────────────────────────────────────────────────────────┘
-```
-
-## 使用方式
-
-### Step 1: 部署 K8s 集群（可选）
-
-**方式 A: k3d（本地 Docker，适合开发）**
-```powershell
-.\deploy-k8s-cluster.ps1 -WithK3d -K3dNodeCount 3
-```
-
-**方式 B: K3s HA（3台物理机/VM，适合生产）**
-```powershell
-.\deploy-k8s-cluster.ps1 -NodeIps "192.168.1.10","192.168.1.11","192.168.1.12" -SshKeyPath "C:\Users\me\.ssh\id_rsa"
-```
-
-**方式 C: 已有集群**
-```powershell
-.\deploy-k8s-cluster.ps1 -SkipRegistryStack
-# 确保 kubectl 已配置好集群访问
-```
-
-### Step 2: 部署中间件
+### 🪟 Windows
 
 ```powershell
-# 基础三件套（始终部署）：PostgreSQL + MySQL + Redis + Harbor
-.\deploy-registry-stack.ps1
+# 1. 起集群
+.\deploy-k8s-cluster.ps1 -WithK3d
 
-# 全家桶（全部中间件）
+# 2. 全量中间件
 .\deploy-registry-stack.ps1 -WithAll
 
 # 按需组合
 .\deploy-registry-stack.ps1 -WithKafka -WithElasticsearch -WithNacos -WithSkyWalking
+
+# 先校验
+.\deploy-registry-stack.ps1 -DryRun
 ```
 
-## 参数说明
+## 中间件一览
 
-### deploy-registry-stack.ps1
+| 中间件 | Linux 参数 | Windows 参数 | 节点数 | 说明 |
+|--------|-----------|-------------|--------|------|
+| PostgreSQL | (基础) | (基础) | 3 | Harbor 元数据 |
+| MySQL | (基础) | (基础) | 3 | 应用数据库 |
+| Redis | (基础) | (基础) | 3 | 缓存 + Sentinel HA |
+| Kafka | `--kafka` | `-WithKafka` | 3 | KRaft 模式 |
+| Elasticsearch | `--es` | `-WithElasticsearch` | 3 | 搜索 + 日志 |
+| Nacos | `--nacos` | `-WithNacos` | 3 | 注册中心 + 配置中心 |
+| RocketMQ | `--rocketmq` | `-WithRocketMQ` | 6 | 3NS + 3Broker |
+| Sentinel | `--sentinel` | `-WithSentinel` | 2 | 流量治理 |
+| SkyWalking | `--skywalking` | `-WithSkyWalking` | 3 | APM 链路追踪 |
+| MongoDB | `--mongo` | `-WithMongoDB` | 3 | NoSQL 文档数据库 |
+| ZooKeeper | `--zookeeper` | `-WithZooKeeper` | 3 | 分布式协调 |
+| Apollo | `--apollo` | `-WithApollo` | 3 | 配置中心 |
+| TDengine | `--tdengine` | `-WithTDengine` | 3 | 时序数据库 |
+| MinIO | `--minio` | `-WithMinIO` | 1 | S3 对象存储 |
+| Harbor | (始终部署) | (始终部署) | - | 镜像仓库 |
 
-| 参数 | 说明 | 默认 |
-|------|------|------|
-| `-WithAll` | 部署全部中间件 | false |
-| `-WithMinIO` | MinIO 对象存储 | false |
-| `-WithKafka` | Kafka 3节点 (KRaft) | false |
-| `-WithElasticsearch` | Elasticsearch 3节点 | false |
-| `-WithNacos` | Nacos 3节点 (需要 MySQL) | false |
-| `-WithRocketMQ` | RocketMQ 3+3节点 | false |
-| `-WithSentinel` | Sentinel Dashboard 2节点 | false |
-| `-WithSkyWalking` | SkyWalking OAP 3节点 (需要 ES) | false |
-| `-WithMongoDB` | MongoDB 3节点 ReplicaSet | false |
-| `-WithZooKeeper` | ZooKeeper 3节点 | false |
-| `-WithApollo` | Apollo 3节点 (需要 MySQL) | false |
-| `-WithTDengine` | TDengine 3节点 | false |
-| `-WithIngress` | 使用 Ingress (默认 NodePort) | false |
-| `-Namespace` | K8s 命名空间 | registry-stack |
+## 端口映射 (NodePort 模式)
 
-### deploy-k8s-cluster.ps1
-
-| 参数 | 说明 | 默认 |
-|------|------|------|
-| `-WithK3d` | 使用 k3d 本地部署 | false |
-| `-K3dNodeCount` | k3d 节点数量 | 3 |
-| `-NodeIps` | 物理机 IP 数组 | 空 |
-| `-SshUser` | SSH 用户 | root |
-| `-K3sVersion` | K3s 版本 | v1.30.2+k3s2 |
-| `-SkipRegistryStack` | 跳过中间件部署 | false |
-
-## 服务端口映射（NodePort 模式）
-
-| 端口 | 服务 | 说明 |
-|------|------|------|
-| 30002 | Harbor HTTP | 镜像库 Web UI |
-| 30003 | Harbor HTTPS | 镜像库安全端口 |
-| 30006 | SkyWalking UI | 链路追踪控制台 |
-| 30007 | Apollo Portal | 配置中心控制台 |
-| 30008 | Sentinel Dashboard | 流量控制控制台 |
-| 30009 | Sentinel API | 监控 API |
-| 30010 | RocketMQ NameServer | 消息队列接入 |
+| 端口 | 服务 |
+|------|------|
+| 30002 | Harbor HTTP |
+| 30003 | Harbor HTTPS |
+| 30006 | SkyWalking UI |
+| 30007 | Apollo Portal |
+| 30008 | Sentinel Dashboard |
+| 30009 | Sentinel API |
+| 30010 | RocketMQ NameServer |
 
 ## 配置目录
 
-| 文件 | 说明 |
-|------|------|
-| `config/harbor-values.yaml` | Harbor (外部 PG + Redis + PVC) |
-| `config/postgresql-values.yaml` | PostgreSQL 3-node HA (pgpool) |
-| `config/mysql-values.yaml` | MySQL 3-node 半同步复制 |
-| `config/redis-values.yaml` | Redis 3-node Sentinel |
-| `config/kafka-values.yaml` | Kafka 3-node KRaft |
-| `config/elasticsearch-values.yaml` | Elasticsearch 3-node |
-| `config/nacos-values.yaml` | Nacos 3-node + MySQL |
-| `config/mongodb-values.yaml` | MongoDB 3-node ReplicaSet |
-| `config/zookeeper-values.yaml` | ZooKeeper 3-node |
-| `config/skywalking-values.yaml` | SkyWalking OAP 3-node + ES |
-| `config/apollo-values.yaml` | Apollo 3-node + MySQL |
-| `config/tdengine-values.yaml` | TDengine 3-node |
-| `config/manifests/rocketmq.yaml` | RocketMQ (NameServer 3 + Broker 3) |
-| `config/manifests/sentinel-dashboard.yaml` | Sentinel Dashboard 2-node |
+```
+config/
+├── manifests/
+│   ├── rocketmq.yaml              # RocketMQ raw YAML
+│   └── sentinel-dashboard.yaml    # Sentinel raw YAML
+├── harbor-values.yaml
+├── postgresql-values.yaml
+├── mysql-values.yaml
+├── redis-values.yaml
+├── kafka-values.yaml
+├── elasticsearch-values.yaml
+├── nacos-values.yaml
+├── mongodb-values.yaml
+├── zookeeper-values.yaml
+├── skywalking-values.yaml
+├── apollo-values.yaml
+└── tdengine-values.yaml
+```
+
+## 脚本说明
+
+| 脚本 | 平台 | 功能 |
+|------|------|------|
+| `deploy-k8s-cluster.sh` | 🐧 Linux | k3d / K3s HA 集群部署 |
+| `deploy-registry-stack.sh` | 🐧 Linux | 中间件一键部署 |
+| `deploy-k8s-cluster.ps1` | 🪟 Windows | k3d / K3s HA 集群部署 |
+| `deploy-registry-stack.ps1` | 🪟 Windows | 中间件一键部署 |
 
 ## 卸载
 
-```powershell
-# 卸载中间件
-helm uninstall pg mysql redis harbor kafka elasticsearch nacos mongodb zookeeper skywalking tdengine apollo -n registry-stack
-
-# 清理 PVC
+```bash
+helm uninstall pg mysql redis kafka elasticsearch mongodb zookeeper nacos skywalking tdengine apollo harbor -n registry-stack 2>/dev/null
 kubectl delete pvc -n registry-stack --all
-
-# 删除命名空间
 kubectl delete ns registry-stack
-
-# 删除 k3d 集群
-k3d cluster delete beggar-cluster
 ```

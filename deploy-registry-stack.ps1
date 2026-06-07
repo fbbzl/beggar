@@ -1,374 +1,201 @@
 param(
     [string]$Namespace = "registry-stack",
     [string]$AdminPassword = "Harbor12345",
-
-    # === 部署模式 ===
-    [switch]$WithIngress,
     [string]$IngressDomain = "registry.local",
 
-    # === 中间件开关 ===
-    [switch]$WithKafka,
-    [switch]$WithElasticsearch,
-    [switch]$WithNacos,
-    [switch]$WithRocketMQ,
-    [switch]$WithSentinel,
-    [switch]$WithSkyWalking,
-    [switch]$WithMongoDB,
-    [switch]$WithZooKeeper,
-    [switch]$WithApollo,
-    [switch]$WithTDengine,
-    [switch]$WithMinIO,
-
-    # === 快捷 ===
-    [switch]$WithAll,
-    [switch]$DryRun
+    # === 组件开关（全部独立，默认OFF） ===
+    [switch]$Pg, [switch]$Postgresql,       # PostgreSQL 3-node
+    [switch]$Mysql,                          # MySQL 3-node
+    [switch]$Redis,                          # Redis 3-node Sentinel
+    [switch]$MinIO,                          # MinIO 对象存储
+    [switch]$Kafka,                          # Kafka 3-node KRaft
+    [switch]$Es, [switch]$Elasticsearch,     # Elasticsearch 3-node
+    [switch]$Mongo, [switch]$Mongodb,        # MongoDB 3-node
+    [switch]$Zk, [switch]$Zookeeper,         # ZooKeeper 3-node
+    [switch]$Nacos,                          # Nacos 3-node + MySQL
+    [switch]$RocketMQ,                       # RocketMQ 3+3
+    [switch]$Sentinel,                       # Sentinel Dashboard 2-node
+    [switch]$Skywalking,                     # SkyWalking OAP 3-node
+    [switch]$Apollo,                         # Apollo 3-node + MySQL
+    [switch]$Tdengine,                       # TDengine 3-node
+    [switch]$Harbor,                         # Harbor 镜像库 + PG + Redis
+    [switch]$All,                            # 全部
+    [switch]$WithIngress,                    # 启用 Ingress
+    [switch]$DryRun                          # 校验不真跑
 )
 
-if ($WithAll) {
-    $WithKafka = $WithElasticsearch = $WithNacos = $WithRocketMQ = $true
-    $WithSentinel = $WithSkyWalking = $WithMongoDB = $WithZooKeeper = $true
-    $WithApollo = $WithTDengine = $WithMinIO = $true
+# ── 一一映射 ──
+if ($Postgresql) { $Pg = $true }
+if ($Elasticsearch) { $Es = $true }
+if ($Mongodb) { $Mongo = $true }
+if ($Zookeeper) { $Zk = $true }
+
+# ── All 快捷 ──
+if ($All) {
+    $Pg = $Mysql = $Redis = $MinIO = $Kafka = $Es = $Mongo = $Zk = $true
+    $Nacos = $RocketMQ = $Sentinel = $Skywalking = $Apollo = $Tdengine = $Harbor = $true
+}
+
+# ── 依赖自动推导 ──
+if ($Nacos)  { $Mysql = $true }
+if ($Apollo) { $Mysql = $true }
+if ($Harbor) { $Pg = $true; $Redis = $true }
+
+# ── 无参数 → 帮助 ──
+$any = $Pg -or $Mysql -or $Redis -or $MinIO -or $Kafka -or $Es -or $Mongo -or $Zk `
+     -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor
+if (-not $any) {
+    Write-Host @"
+用法: .\deploy-registry-stack.ps1 [选项]
+选项:
+  -Pg | -Postgresql   PostgreSQL 3-node HA
+  -Mysql              MySQL 3-node 主从
+  -Redis              Redis 3-node Sentinel
+  -Kafka              Kafka 3-node KRaft
+  -Es | -Elasticsearch Elasticsearch 3-node
+  -Mongo | -Mongodb   MongoDB 3-node ReplicaSet
+  -Zk | -Zookeeper    ZooKeeper 3-node
+  -Nacos              Nacos 3-node (+MySQL)
+  -RocketMQ           RocketMQ 3+3
+  -Sentinel           Sentinel Dashboard 2-node
+  -Skywalking         SkyWalking OAP 3-node
+  -Apollo             Apollo 3-node (+MySQL)
+  -Tdengine           TDengine 3-node
+  -MinIO              MinIO 对象存储
+  -Harbor             Harbor 镜像库 (+PG+Redis)
+  -All                全部
+  -WithIngress        启用 Ingress (默认 NodePort)
+  -DryRun             校验配置不实际部署
+"@
+    exit 1
 }
 
 # ── globals ──
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Info = [System.Collections.ArrayList]@()
-$DeployedOk = $true
-$crossSep = if ($IsWindows -or $env:OS) { '\' } else { '/' }
+$CFG = "$ScriptDir/config"
 
-function Write-Step($msg) {
-    Write-Host "`n[$(Get-Date -Format HH:mm:ss)] >>> $msg" -ForegroundColor Cyan
-}
+function step($m) { Write-Host "`n[$(Get-Date -Format HH:mm:ss)] >>> $m" -ForegroundColor Cyan }
+function ok($m)   { Write-Host "  $m 完成" -ForegroundColor Green }
+function warn($m) { Write-Host "  [WARN] $m" -ForegroundColor Yellow }
 
-function Check-Cmd($cmd) {
-    if (!(Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Host "[FATAL] 未找到命令 '$cmd'，请先安装" -ForegroundColor Red
-        if ($cmd -eq "pwsh") { Write-Host "  提示: Linux 下运行 'curl -fsSL https://aka.ms/install-powershell | bash' 安装 pwsh" -ForegroundColor Yellow }
-        exit 1
-    }
-}
-
-function Helms($name) {
-    # helm search repo -l | grep name 检查 chart 是否存在
-    $r = helm search repo $name --fail-on-no-result 2>&1 | Select-String "^$name\s"
-    return [bool]$r
-}
-
-function Hlm($name, $chart, $values, $extra) {
-    if ($DryRun) {
-        Write-Host "  [DRY-RUN] helm upgrade --install $name $chart --namespace $Namespace [values]" -ForegroundColor DarkGray
-        return
-    }
-    $argsList = @("upgrade", "--install", $name, $chart,
-        "--namespace", $Namespace, "--wait", "--timeout", "10m")
-    if ($values) { $argsList += "--values", (Resolve-Path $values) }
-    if ($extra)  { $argsList += $extra }
+function hlm($name, $chart, $values, $extra) {
+    if ($DryRun) { Write-Host "  [DRY-RUN] helm upgrade --install $name $chart" -ForegroundColor DarkGray; return $true }
+    $args = @("upgrade", "--install", $name, $chart, "--namespace", $Namespace, "--wait", "--timeout", "10m")
+    if ($values) { $args += "--values"; $args += (Resolve-Path $values) }
+    if ($extra)  { $args += $extra }
     try {
-        $output = helm $argsList *>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  [WARN] $name 部署异常:" -ForegroundColor Yellow
-            $output | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-            return $false
-        }
-        Write-Host "  $name 部署完成" -ForegroundColor Green
-        return $true
-    } catch {
-        Write-Host "  [WARN] $name 异常: $_" -ForegroundColor Yellow
-        return $false
-    }
+        $out = helm $args *>&1
+        if ($LASTEXITCODE -ne 0) { warn "$name 异常"; $out | %{ Write-Host "    $_" -ForegroundColor DarkGray }; return $false }
+        ok $name; return $true
+    } catch { warn "$name: $_"; return $false }
 }
 
-function KubeApply($file) {
-    if ($DryRun) {
-        Write-Host "  [DRY-RUN] kubectl apply -n $Namespace -f $(Split-Path $file -Leaf)" -ForegroundColor DarkGray
-        return
-    }
-    $output = kubectl apply -n $Namespace -f (Resolve-Path $file) 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  [WARN] $(Split-Path $file -Leaf) 部署异常:" -ForegroundColor Yellow
-        $output | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-    } else {
-        Write-Host "  $(Split-Path $file -Leaf) 部署完成" -ForegroundColor Green
-    }
+function kubeApply($file) {
+    if ($DryRun) { Write-Host "  [DRY-RUN] kubectl apply -f $(Split-Path $file -Leaf)" -ForegroundColor DarkGray; return }
+    $out = kubectl apply -n $Namespace -f (Resolve-Path $file) 2>&1
+    if ($LASTEXITCODE -ne 0) { warn "$(Split-Path $file -Leaf) 异常" } else { ok $(Split-Path $file -Leaf) }
 }
 
-function ExecInPod($podSelector, $cmd) {
-    $pod = kubectl get pod -n $Namespace -l $podSelector -o jsonpath='{.items[0].metadata.name}' 2>$null
+function execPod($label, $cmd) {
+    $pod = kubectl get pod -n $Namespace -l $label -o jsonpath='{.items[0].metadata.name}' 2>$null
     if (-not $pod) { return $false }
-    $output = kubectl exec -n $Namespace $pod -- bash -c $cmd 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  [WARN] exec 失败: $cmd" -ForegroundColor Yellow
-        $output | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-        return $false
-    }
-    return $true
+    kubectl exec -n $Namespace $pod -- bash -c $cmd 2>&1 | Out-Null; return $true
 }
 
-function MkDir($p) {
-    if (!(Test-Path $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
-}
-
-# ==========================================================================
-# 0. PRECHECK
-# ==========================================================================
-Write-Step "前提条件检查"
-Check-Cmd "helm"; Check-Cmd "kubectl"
-$pwshVer = $PSVersionTable.PSVersion
-Write-Host "  PowerShell: $($pwshVer.Major).$($pwshVer.Minor)" -ForegroundColor Green
-Write-Host "  Helm: $(helm version --short 2>&1)" -ForegroundColor Green
-
+# ════════════════════════════════
+# 0. Precheck
+# ════════════════════════════════
+step "前提检查"
+if (!(Get-Command helm -EA SilentlyContinue)) { Write-Host "需要 helm" -ForegroundColor Red; exit 1 }
+if (!(Get-Command kubectl -EA SilentlyContinue)) { Write-Host "需要 kubectl" -ForegroundColor Red; exit 1 }
 if (-not $DryRun) {
     kubectl cluster-info --request-timeout 5s 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[FATAL] 无法连接 K8s 集群，请检查 kubeconfig" -ForegroundColor Red
-        exit 1
+    if ($LASTEXITCODE -ne 0) { Write-Host "无法连接 K8s 集群" -ForegroundColor Red; exit 1 }
+    Write-Host "  K8s 已连接" -ForegroundColor Green
+}
+
+step "Helm Repos"
+@("bitnami", "elastic", "harbor", "nacos-group", "apache", "apolloconfig", "tdengine") | ForEach-Object {
+    helm repo add $_ "https://charts.$_.com" 2>$null | Out-Null
+}
+# 修复已知 repo URL
+helm repo add bitnami https://charts.bitnami.com/bitnami 2>$null | Out-Null
+helm repo add elastic https://helm.elastic.co 2>$null | Out-Null
+helm repo add harbor https://helm.goharbor.io 2>$null | Out-Null
+helm repo add nacos-group https://nacos-group.github.io/nacos-helm 2>$null | Out-Null
+helm repo add apache https://apache.jfrog.io/artifactory/skywalking-helm 2>$null | Out-Null
+helm repo add apolloconfig https://apolloconfig.github.io/apollo-helm 2>$null | Out-Null
+helm repo add tdengine https://tdengine.github.io/helm-charts 2>$null | Out-Null
+helm repo update 2>$null | Out-Null
+ok "Repos"
+
+step "命名空间: $Namespace"
+kubectl create ns $Namespace --dry-run=client -o yaml | kubectl apply -f - 2>&1 | Out-Null
+
+# ════════════════════════════════
+# 部署
+# ════════════════════════════════
+if ($Mysql) { step "--- MySQL ---"; hlm "mysql" "bitnami/mysql" "$CFG/mysql-values.yaml" $null }
+if ($Pg)    { step "--- PostgreSQL ---"; hlm "pg" "bitnami/postgresql-ha" "$CFG/postgresql-values.yaml" $null }
+if ($Redis) { step "--- Redis ---"; hlm "redis" "bitnami/redis" "$CFG/redis-values.yaml" $null }
+if ($MinIO) { step "--- MinIO ---"; hlm "minio" "bitnami/minio" $null @("--set", "auth.rootUser=minioadmin,auth.rootPassword=minioadmin", "--set", "persistence.size=50Gi", "--set", "defaultBuckets=harbor") }
+
+if ($Es)    { step "--- Elasticsearch ---"; hlm "elasticsearch" "elastic/elasticsearch" "$CFG/elasticsearch-values.yaml" $null }
+if ($Mongo) { step "--- MongoDB ---"; hlm "mongodb" "bitnami/mongodb" "$CFG/mongodb-values.yaml" $null }
+if ($Zk)    { step "--- ZooKeeper ---"; hlm "zookeeper" "bitnami/zookeeper" "$CFG/zookeeper-values.yaml" $null }
+
+if ($Kafka)    { step "--- Kafka ---"; hlm "kafka" "bitnami/kafka" "$CFG/kafka-values.yaml" $null }
+if ($RocketMQ) { step "--- RocketMQ ---"; kubeApply "$CFG/manifests/rocketmq.yaml" }
+
+if ($Nacos) { step "--- Nacos ---"; execPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS nacos CHARACTER SET utf8mb4;'" | Out-Null; hlm "nacos" "nacos-group/nacos" "$CFG/nacos-values.yaml" $null }
+if ($Apollo) { step "--- Apollo ---"
+    execPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS ApolloConfigDB CHARACTER SET utf8mb4;'" | Out-Null
+    execPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS ApolloPortalDB CHARACTER SET utf8mb4;'" | Out-Null
+    hlm "apollo" "apolloconfig/apollo-service" "$CFG/apollo-values.yaml" $null
+}
+if ($Sentinel)   { step "--- Sentinel ---"; kubeApply "$CFG/manifests/sentinel-dashboard.yaml" }
+if ($Skywalking) { step "--- SkyWalking ---"; hlm "skywalking" "apache/skywalking-helm" "$CFG/skywalking-values.yaml" $null }
+if ($Tdengine)   { step "--- TDengine ---"; hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml" $null }
+
+if ($Harbor) {
+    step "--- Harbor ---"
+    $extra = @()
+    if ($WithIngress) { $extra += "--set", "expose.type=ingress"; $extra += "--set", "expose.ingress.hosts.core=$IngressDomain" }
+    if ($MinIO) {
+        $extra += "--set", "persistence.imageChartStorage.type=s3"
+        $extra += "--set", "persistence.imageChartStorage.s3.region=us-east-1"
+        $extra += "--set", "persistence.imageChartStorage.s3.bucket=harbor"
+        $extra += "--set", "persistence.imageChartStorage.s3.accesskey=minioadmin"
+        $extra += "--set", "persistence.imageChartStorage.s3.secretkey=minioadmin"
+        $extra += "--set", "persistence.imageChartStorage.s3.endpoint=http://minio.$Namespace.svc:9000"
+        $extra += "--set", "persistence.imageChartStorage.s3.secure=false"
     }
-    Write-Host "  K8s: $(kubectl version --short 2>&1 | Select-String 'Server' | Select-Object -First 1)" -ForegroundColor Green
+    hlm "harbor" "harbor/harbor" "$CFG/harbor-values.yaml" (@("--set", "harborAdminPassword=$AdminPassword") + $extra)
 }
 
-if ($DryRun) {
-    Write-Host "  [DRY-RUN] 仅校验配置，不实际部署" -ForegroundColor Cyan
-}
-
-# ==========================================================================
-# 1. HELM REPOS
-# ==========================================================================
-Write-Step "添加 Helm Repo"
-$repos = @(
-    @("bitnami", "https://charts.bitnami.com/bitnami"),
-    @("elastic", "https://helm.elastic.co"),
-    @("harbor", "https://helm.goharbor.io")
-)
-# 社区 chart 单独处理，失败不影响主线
-$communityRepos = @(
-    @("nacos-group", "https://nacos-group.github.io/nacos-helm"),
-    @("apache", "https://apache.jfrog.io/artifactory/skywalking-helm"),
-    @("apolloconfig", "https://apolloconfig.github.io/apollo-helm"),
-    @("tdengine", "https://tdengine.github.io/helm-charts")
-)
-
-$repoErrors = @()
-foreach ($r in $repos) {
-    $out = helm repo add $r[0] $r[1] 2>&1
-    if ($LASTEXITCODE -ne 0) { $repoErrors += "$($r[0]): $out" }
-}
-# 社区 repo 加了但不强求成功
-foreach ($r in $communityRepos) {
-    helm repo add $r[0] $r[1] 2>&1 | Out-Null
-}
-helm repo update 2>&1 | Out-Null
-
-if ($repoErrors.Count -gt 0) {
-    Write-Host "  [WARN] 部分 repo 添加失败:" -ForegroundColor Yellow
-    $repoErrors | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-} else {
-    Write-Host "  主 repo 已就绪" -ForegroundColor Green
-}
-
-# ==========================================================================
-# 2. NAMESPACE
-# ==========================================================================
-Write-Step "命名空间: $Namespace"
-kubectl create ns $Namespace --dry-run=client -o yaml | kubectl apply -f -
-$Global:DeployedOk = $false
-
-# ==========================================================================
-# 3. BASE LAYER
-# ==========================================================================
-Write-Step "--- 基础层: PostgreSQL / MySQL / Redis ---"
-$pgOk = Hlm "pg" "bitnami/postgresql-ha" "$ScriptDir/config/postgresql-values.yaml" $null
-if ($pgOk) {
-    [void]$Info.Add(@{svc="PostgreSQL"; host="pg-postgresql-ha-pgpool.$Namespace.svc"; port=5432; user="harbor"; pass="harbordb123"})
-    Write-Step "创建 Harbor 数据库 (notary_server, notary_signer)"
-    ExecInPod "app.kubernetes.io/component=postgresql" @"
-bash -c 'psql -U postgres -c "SELECT 1 FROM pg_database WHERE datname=''notary_server''" 2>/dev/null | grep -q 1 || psql -U postgres -c "CREATE DATABASE notary_server OWNER harbor;"'
-"@ | Out-Null
-    ExecInPod "app.kubernetes.io/component=postgresql" @"
-bash -c 'psql -U postgres -c "SELECT 1 FROM pg_database WHERE datname=''notary_signer''" 2>/dev/null | grep -q 1 || psql -U postgres -c "CREATE DATABASE notary_signer OWNER harbor;"'
-"@ | Out-Null
-    ExecInPod "app.kubernetes.io/component=postgresql" @"
-bash -c 'psql -U postgres -c "ALTER USER harbor CREATEDB;"'
-"@ | Out-Null
-}
-
-$mysqlOk = Hlm "mysql" "bitnami/mysql" "$ScriptDir/config/mysql-values.yaml" $null
-if ($mysqlOk) {
-    [void]$Info.Add(@{svc="MySQL 主"; host="mysql-mysql-primary.$Namespace.svc"; port=3306; user="root"; pass="mysqlroot123"})
-}
-
-$redisOk = Hlm "redis" "bitnami/redis" "$ScriptDir/config/redis-values.yaml" $null
-if ($redisOk) {
-    [void]$Info.Add(@{svc="Redis 主"; host="redis-redis.$Namespace.svc"; port=6379; user="-"; pass="redispass123"})
-}
-
-# ==========================================================================
-# 4. OPTIONAL: MinIO
-# ==========================================================================
-if ($WithMinIO) {
-    Write-Step "--- MinIO 对象存储 ---"
-    $ok = Hlm "minio" "bitnami/minio" $null @("--set", "auth.rootUser=minioadmin,auth.rootPassword=minioadmin", "--set", "persistence.size=50Gi", "--set", "defaultBuckets=harbor")
-    if ($ok) { [void]$Info.Add(@{svc="MinIO S3"; host="minio.$Namespace.svc"; port=9000; user="minioadmin"; pass="minioadmin"}) }
-}
-
-# ==========================================================================
-# 5. STORAGE / COORDINATION
-# ==========================================================================
-if ($WithElasticsearch) {
-    Write-Step "--- Elasticsearch 3-node ---"
-    $ok = Hlm "elasticsearch" "elastic/elasticsearch" "$ScriptDir/config/elasticsearch-values.yaml" $null
-    if ($ok) { [void]$Info.Add(@{svc="Elasticsearch"; host="elasticsearch-master.$Namespace.svc"; port=9200; user="-"; pass="-"}) }
-}
-
-if ($WithMongoDB) {
-    Write-Step "--- MongoDB 3-node ReplicaSet ---"
-    $ok = Hlm "mongodb" "bitnami/mongodb" "$ScriptDir/config/mongodb-values.yaml" $null
-    if ($ok) { [void]$Info.Add(@{svc="MongoDB"; host="mongodb.$Namespace.svc"; port=27017; user="root"; pass="mongoroot123"}) }
-}
-
-if ($WithZooKeeper) {
-    Write-Step "--- ZooKeeper 3-node ---"
-    $ok = Hlm "zookeeper" "bitnami/zookeeper" "$ScriptDir/config/zookeeper-values.yaml" $null
-    if ($ok) { [void]$Info.Add(@{svc="ZooKeeper"; host="zookeeper.$Namespace.svc"; port=2181; user="-"; pass="-"}) }
-}
-
-# ==========================================================================
-# 6. MESSAGING
-# ==========================================================================
-if ($WithKafka) {
-    Write-Step "--- Kafka 3-node KRaft ---"
-    $ok = Hlm "kafka" "bitnami/kafka" "$ScriptDir/config/kafka-values.yaml" $null
-    if ($ok) { [void]$Info.Add(@{svc="Kafka (bootstrap)"; host="kafka-kafka-bootstrap.$Namespace.svc"; port=9092; user="-"; pass="-"}) }
-}
-
-if ($WithRocketMQ) {
-    Write-Step "--- RocketMQ 3+3 (NameServer + Broker) ---"
-    Write-Host "  [INFO] RocketMQ 通过原生 YAML 部署 (无 Helm chart)" -ForegroundColor DarkGray
-    KubeApply "$ScriptDir/config/manifests/rocketmq.yaml"
-    [void]$Info.Add(@{svc="RocketMQ NS"; host="rocketmq-namesrv.$Namespace.svc"; port=9876; user="-"; pass="-"})
-    [void]$Info.Add(@{svc="RocketMQ Broker"; host="rocketmq-broker.$Namespace.svc"; port=10911; user="-"; pass="-"})
-}
-
-# ==========================================================================
-# 7. SERVICE DISCOVERY & CONFIG
-# ==========================================================================
-if ($WithNacos) {
-    Write-Step "--- Nacos 3-node ---"
-    if ($mysqlOk) {
-        Write-Host "  初始化 Nacos 数据库" -ForegroundColor DarkGray
-        ExecInPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS nacos CHARACTER SET utf8mb4;'" | Out-Null
-    } else {
-        Write-Host "  [WARN] MySQL 不可用，Nacos 可能无法正常启动" -ForegroundColor Yellow
-    }
-    $ok = Hlm "nacos" "nacos-group/nacos" "$ScriptDir/config/nacos-values.yaml" $null
-    if ($ok) { [void]$Info.Add(@{svc="Nacos"; host="nacos.$Namespace.svc"; port=8848; user="nacos"; pass="nacos"}) }
-}
-
-if ($WithApollo) {
-    Write-Step "--- Apollo 3-node ---"
-    if ($mysqlOk) {
-        Write-Host "  初始化 Apollo 数据库" -ForegroundColor DarkGray
-        ExecInPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS ApolloConfigDB CHARACTER SET utf8mb4;'" | Out-Null
-        ExecInPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS ApolloPortalDB CHARACTER SET utf8mb4;'" | Out-Null
-    } else {
-        Write-Host "  [WARN] MySQL 不可用，Apollo 可能无法正常启动" -ForegroundColor Yellow
-    }
-    $ok = Hlm "apollo" "apolloconfig/apollo-service" "$ScriptDir/config/apollo-values.yaml" $null
-    if ($ok) {
-        [void]$Info.Add(@{svc="Apollo Portal"; host="apollo-apollo-portal.$Namespace.svc"; port=8070; user="apollo"; pass="admin"})
-        [void]$Info.Add(@{svc="Apollo Config"; host="apollo-apollo-configservice.$Namespace.svc"; port=8080; user="-"; pass="-"})
-    }
-}
-
-# ==========================================================================
-# 8. CONTROL / APM
-# ==========================================================================
-if ($WithSentinel) {
-    Write-Step "--- Sentinel Dashboard 2-node ---"
-    Write-Host "  [INFO] Sentinel 通过原生 YAML 部署 (无 Helm chart)" -ForegroundColor DarkGray
-    KubeApply "$ScriptDir/config/manifests/sentinel-dashboard.yaml"
-    [void]$Info.Add(@{svc="Sentinel"; host="sentinel-dashboard.$Namespace.svc"; port=8080; user="sentinel"; pass="sentinel123"})
-}
-
-if ($WithSkyWalking) {
-    Write-Step "--- SkyWalking OAP 3-node ---"
-    $ok = Hlm "skywalking" "apache/skywalking-helm" "$ScriptDir/config/skywalking-values.yaml" $null
-    if ($ok) {
-        [void]$Info.Add(@{svc="SkyWalking OAP (gRPC)"; host="skywalking-oap.$Namespace.svc"; port=11800; user="-"; pass="-"})
-        [void]$Info.Add(@{svc="SkyWalking UI"; host="skywalking-ui.$Namespace.svc"; port=8080; user="-"; pass="-"})
-    }
-}
-
-# ==========================================================================
-# 9. TIME-SERIES
-# ==========================================================================
-if ($WithTDengine) {
-    Write-Step "--- TDengine 3-node ---"
-    $ok = Hlm "tdengine" "tdengine/tdengine" "$ScriptDir/config/tdengine-values.yaml" $null
-    if ($ok) { [void]$Info.Add(@{svc="TDengine"; host="tdengine.$Namespace.svc"; port=6030; user="root"; pass="taosdata"}) }
-}
-
-# ==========================================================================
-# 10. HARBOR (镜像库)
-# ==========================================================================
-Write-Step "--- Harbor 镜像库 ---"
-$harborExtra = @()
-if ($WithIngress) {
-    $harborExtra += "--set", "expose.type=ingress"
-    $harborExtra += "--set", "expose.ingress.hosts.core=$IngressDomain"
-}
-if ($WithMinIO) {
-    $harborExtra += "--set", "persistence.imageChartStorage.type=s3"
-    $harborExtra += "--set", "persistence.imageChartStorage.s3.region=us-east-1"
-    $harborExtra += "--set", "persistence.imageChartStorage.s3.bucket=harbor"
-    $harborExtra += "--set", "persistence.imageChartStorage.s3.accesskey=minioadmin"
-    $harborExtra += "--set", "persistence.imageChartStorage.s3.secretkey=minioadmin"
-    $harborExtra += "--set", "persistence.imageChartStorage.s3.endpoint=http://minio.$Namespace.svc:9000"
-    $harborExtra += "--set", "persistence.imageChartStorage.s3.secure=false"
-}
-$hOk = Hlm "harbor" "harbor/harbor" "$ScriptDir/config/harbor-values.yaml" (@("--set", "harborAdminPassword=$AdminPassword") + $harborExtra)
-
+# ════════════════════════════════
+# 摘要
+# ════════════════════════════════
+step "===== 摘要 ====="
 $nodeIP = kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>$null
 if (-not $nodeIP) { $nodeIP = "localhost" }
-if ($WithIngress) {
-    [void]$Info.Add(@{svc="Harbor UI"; host="http://$IngressDomain"; port=80; user="admin"; pass=$AdminPassword})
-} else {
-    [void]$Info.Add(@{svc="Harbor UI (NodePort)"; host="http://${nodeIP}:30002"; port=30002; user="admin"; pass=$AdminPassword})
-}
-
-# ==========================================================================
-# 11. SUMMARY
-# ==========================================================================
-Write-Step "===== 部署摘要 ====="
 Write-Host ""
-
-Write-Host "━━━ 服务连接信息 ━━━" -ForegroundColor Yellow
-Write-Host ""
-$Info | ForEach-Object {
-    $svcName = $_.svc.PadRight(28)
-    $conn = "$($_.host):$($_.port)"
-    Write-Host "  $svcName $conn" -ForegroundColor Green
-    if ($_.user -ne "-" -or $_.pass -ne "-") {
-        $cred = "  $(''.PadRight(28))  "
-        if ($_.user -and $_.user -ne "-") { $cred += "user=$($_.user)" }
-        if ($_.pass -and $_.pass -ne "-") {
-            if ($cred.Length -gt 30) { $cred += "  " }
-            $cred += "pass=$($_.pass)"
-        }
-        Write-Host $cred -ForegroundColor DarkGray
-    }
-}
+if ($Pg)  { Write-Host "  PostgreSQL : pg-postgresql-ha-pgpool.$Namespace.svc:5432 (harbor / harbordb123)" -ForegroundColor Green }
+if ($Mysql) { Write-Host "  MySQL      : mysql-mysql-primary.$Namespace.svc:3306 (root / mysqlroot123)" -ForegroundColor Green }
+if ($Redis) { Write-Host "  Redis      : redis-redis.$Namespace.svc:6379 (redispass123)" -ForegroundColor Green }
+if ($Kafka) { Write-Host "  Kafka      : kafka-kafka-bootstrap.$Namespace.svc:9092" -ForegroundColor Green }
+if ($Es)    { Write-Host "  ES         : elasticsearch-master.$Namespace.svc:9200" -ForegroundColor Green }
+if ($Mongo) { Write-Host "  MongoDB    : mongodb.$Namespace.svc:27017 (root / mongoroot123)" -ForegroundColor Green }
+if ($Zk)    { Write-Host "  ZooKeeper  : zookeeper.$Namespace.svc:2181" -ForegroundColor Green }
+if ($Nacos) { Write-Host "  Nacos      : nacos.$Namespace.svc:8848 (nacos / nacos)" -ForegroundColor Green }
+if ($RocketMQ) { Write-Host "  RocketMQ NS: rocketmq-namesrv.$Namespace.svc:9876" -ForegroundColor Green }
+if ($Sentinel)  { Write-Host "  Sentinel   : sentinel-dashboard.$Namespace.svc:8080 (sentinel / sentinel123)" -ForegroundColor Green }
+if ($Skywalking){ Write-Host "  SkyWalking : skywalking-oap.$Namespace.svc:11800" -ForegroundColor Green }
+if ($Apollo)    { Write-Host "  Apollo     : apollo-apollo-portal.$Namespace.svc:8070 (apollo / admin)" -ForegroundColor Green }
+if ($Tdengine)  { Write-Host "  TDengine   : tdengine.$Namespace.svc:6030 (root / taosdata)" -ForegroundColor Green }
+if ($MinIO)     { Write-Host "  MinIO      : minio.$Namespace.svc:9000 (minioadmin / minioadmin)" -ForegroundColor Green }
+if ($Harbor)    { if ($WithIngress) { Write-Host "  Harbor     : http://$IngressDomain (admin / $AdminPassword)" -ForegroundColor Green } else { Write-Host "  Harbor     : http://${nodeIP}:30002 (admin / $AdminPassword)" -ForegroundColor Green } }
 
 Write-Host ""
-Write-Host "━━━ Pod 状态 ━━━" -ForegroundColor Yellow
 kubectl get pods -n $Namespace --ignore-not-found 2>&1
-
-Write-Host ""
-Write-Host "━━━ 常用命令 ━━━" -ForegroundColor Yellow
-Write-Host "  查看全部: kubectl get all -n $Namespace" -ForegroundColor Green
-Write-Host "  卸载全部:" -ForegroundColor Green
-Write-Host "    helm uninstall pg mysql redis kafka elasticsearch mongodb zookeeper nacos skywalking tdengine apollo harbor -n $Namespace 2>/dev/null" -ForegroundColor DarkGray
-Write-Host "    kubectl delete ns $Namespace" -ForegroundColor DarkGray
-
-if ($DryRun) {
-    Write-Host "`n[DRY-RUN] 未执行任何实际部署" -ForegroundColor Cyan
-}
+if ($DryRun) { Write-Host "`n[DRY-RUN] 未部署" -ForegroundColor Cyan }
