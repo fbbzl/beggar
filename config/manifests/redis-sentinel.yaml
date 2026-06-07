@@ -1,0 +1,116 @@
+# Redis 3-node Sentinel HA (官方镜像)
+# 接入: redis://redis:6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  ports:
+    - port: 6379
+      name: redis
+  selector:
+    app: redis
+    role: node
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel
+  labels:
+    app: redis
+spec:
+  ports:
+    - port: 26379
+      name: sentinel
+  selector:
+    app: redis
+    role: sentinel
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+spec:
+  serviceName: redis
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+      role: node
+  template:
+    metadata:
+      labels:
+        app: redis
+        role: node
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - sh
+            - -c
+            - |
+              POD_ID=${HOSTNAME##*-}
+              echo "replica-announce-ip $HOSTNAME.redis" >> /etc/redis.conf
+              if [ "$POD_ID" = "0" ]; then
+                redis-server /etc/redis.conf
+              else
+                redis-server /etc/redis.conf --replicaof redis-0.redis 6379
+              fi
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests: { memory: 64Mi, cpu: 50m }
+            limits:   { memory: 256Mi, cpu: 200m }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 2Gi } }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-sentinel
+spec:
+  serviceName: redis-sentinel
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+      role: sentinel
+  template:
+    metadata:
+      labels:
+        app: redis
+        role: sentinel
+    spec:
+      containers:
+        - name: sentinel
+          image: redis:7-alpine
+          command:
+            - sh
+            - -c
+            - |
+              cat > /tmp/sentinel.conf <<EOF
+              port 26379
+              sentinel monitor mymaster redis-0.redis 6379 2
+              sentinel down-after-milliseconds mymaster 5000
+              sentinel failover-timeout mymaster 10000
+              sentinel parallel-syncs mymaster 1
+              sentinel announce-ip $HOSTNAME.redis-sentinel
+              sentinel announce-port 26379
+              EOF
+              redis-sentinel /tmp/sentinel.conf
+          ports:
+            - containerPort: 26379
+          resources:
+            requests: { memory: 32Mi, cpu: 50m }
+            limits:   { memory: 128Mi, cpu: 100m }

@@ -1,0 +1,151 @@
+# PostgreSQL 3-node HA (官方镜像 + repmgr)
+# 主: pg-primary:5432  从: pg-replica-0/1:5432
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-config
+data:
+  pg_hba.conf: |
+    host all all 0.0.0.0/0 trust
+  postgresql.conf: |
+    listen_addresses = '*'
+    max_connections = 200
+    wal_level = replica
+    hot_standby = on
+    max_wal_senders = 10
+    max_replication_slots = 10
+    hot_standby_feedback = on
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-primary
+  labels:
+    app: postgres
+    role: primary
+spec:
+  ports:
+    - port: 5432
+      name: pg
+  selector:
+    app: postgres
+    role: primary
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-replica
+  labels:
+    app: postgres
+    role: replica
+spec:
+  ports:
+    - port: 5432
+      name: pg
+  selector:
+    app: postgres
+    role: replica
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg-primary
+spec:
+  serviceName: pg-primary
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+      role: primary
+  template:
+    metadata:
+      labels:
+        app: postgres
+        role: primary
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_PASSWORD
+              value: "postgres123"
+            - name: POSTGRES_USER
+              value: "harbor"
+            - name: POSTGRES_DB
+              value: "harbor"
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "harbor"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+            limits:   { memory: 512Mi, cpu: 500m }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 10Gi } }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg-replica
+spec:
+  serviceName: pg-replica
+  replicas: 2
+  selector:
+    matchLabels:
+      app: postgres
+      role: replica
+  template:
+    metadata:
+      labels:
+        app: postgres
+        role: replica
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_PASSWORD
+              value: "postgres123"
+            - name: PGDATA
+              value: "/var/lib/postgresql/data"
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              # Wait for primary
+              until pg_isready -h pg-primary -U harbor 2>/dev/null; do sleep 2; done
+              # Base backup from primary
+              rm -rf /var/lib/postgresql/data/*
+              pg_basebackup -h pg-primary -D /var/lib/postgresql/data -U harbor -v -P --wal-method=stream
+              # Configure standby
+              touch /var/lib/postgresql/data/standby.signal
+              echo "primary_conninfo = 'host=pg-primary port=5432 user=harbor password=postgres123'" >> /var/lib/postgresql/data/postgresql.conf
+              echo "hot_standby = on" >> /var/lib/postgresql/data/postgresql.conf
+              # Start
+              exec postgres
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+            limits:   { memory: 512Mi, cpu: 500m }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 10Gi } }
