@@ -19,6 +19,7 @@ param(
     [switch]$Apollo,                         # Apollo 3-node + MySQL
     [switch]$Tdengine,                       # TDengine 3-node
     [switch]$Harbor,                         # Harbor 镜像库 + PG + Redis
+    [switch]$Shardingsphere,                 # ShardingSphere 多主分库
     [switch]$All,                            # 全部
     [switch]$WithIngress,                    # 启用 Ingress
     [switch]$DryRun                          # 校验不真跑
@@ -33,7 +34,7 @@ if ($Zookeeper) { $Zk = $true }
 # ── All 快捷 ──
 if ($All) {
     $Pg = $Mysql = $Redis = $MinIO = $Kafka = $Es = $Mongo = $Zk = $true
-    $Nacos = $RocketMQ = $Sentinel = $Skywalking = $Apollo = $Tdengine = $Harbor = $true
+    $Nacos = $RocketMQ = $Sentinel = $Skywalking = $Apollo = $Tdengine = $Harbor = $Shardingsphere = $true
 }
 
 # ── 依赖自动推导 ──
@@ -43,7 +44,7 @@ if ($Harbor) { $Pg = $true; $Redis = $true }
 
 # ── 无参数 → 帮助 ──
 $any = $Pg -or $Mysql -or $Redis -or $MinIO -or $Kafka -or $Es -or $Mongo -or $Zk `
-     -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor
+     -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor -or $Shardingsphere
 if (-not $any) {
     Write-Host @"
 用法: .\deploy-registry-stack.ps1 [选项]
@@ -63,6 +64,7 @@ if (-not $any) {
   -Tdengine           TDengine 3-node
   -MinIO              MinIO 对象存储
   -Harbor             Harbor 镜像库 (+PG+Redis)
+  -Shardingsphere     ShardingSphere 多主分库 (+3xMySQL)
   -All                全部
   -WithIngress        启用 Ingress (默认 NodePort)
   -DryRun             校验配置不实际部署
@@ -156,6 +158,7 @@ if ($Apollo) { step "--- Apollo ---"
 if ($Sentinel)   { step "--- Sentinel ---"; kubeApply "$CFG/manifests/sentinel-dashboard.yaml" }
 if ($Skywalking) { step "--- SkyWalking ---"; hlm "skywalking" "apache/skywalking-helm" "$CFG/skywalking-values.yaml" $null }
 if ($Tdengine)   { step "--- TDengine ---"; hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml" $null }
+if ($Shardingsphere) { step "--- ShardingSphere ---"; kubeApply "$CFG/manifests/shardingsphere.yaml" }
 
 if ($Harbor) {
     step "--- Harbor ---"
@@ -193,6 +196,7 @@ if ($Sentinel)  { Write-Host "  Sentinel   : sentinel-dashboard.$Namespace.svc:8
 if ($Skywalking){ Write-Host "  SkyWalking : skywalking-oap.$Namespace.svc:11800" -ForegroundColor Green }
 if ($Apollo)    { Write-Host "  Apollo     : apollo-apollo-portal.$Namespace.svc:8070 (apollo / admin)" -ForegroundColor Green }
 if ($Tdengine)  { Write-Host "  TDengine   : tdengine.$Namespace.svc:6030 (root / taosdata)" -ForegroundColor Green }
+if ($Shardingsphere) { Write-Host "  ShardingSphere : shardingsphere-proxy.$Namespace.svc:3307 (MySQL协议)" -ForegroundColor Green }
 if ($MinIO)     { Write-Host "  MinIO      : minio.$Namespace.svc:9000 (minioadmin / minioadmin)" -ForegroundColor Green }
 if ($Harbor)    { if ($WithIngress) { Write-Host "  Harbor     : http://$IngressDomain (admin / $AdminPassword)" -ForegroundColor Green } else { Write-Host "  Harbor     : http://${nodeIP}:30002 (admin / $AdminPassword)" -ForegroundColor Green } }
 

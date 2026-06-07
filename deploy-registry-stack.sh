@@ -30,7 +30,7 @@ CFG="$SCRIPT_DIR/config"
 
 # ── 全部组件初始 OFF ──
 PG=; MYSQL=; REDIS=; MINIO=; KAFKA=; ES=; MONGO=; ZK=;
-NACOS=; ROCKETMQ=; SENTINEL=; SKYWALKING=; APOLLO=; TDENGINE=; HARBOR=; ALL=
+NACOS=; ROCKETMQ=; SENTINEL=; SKYWALKING=; APOLLO=; TDENGINE=; HARBOR=; SHARDINGSPHERE=; ALL=
 
 # ── 参数解析 ──
 while [ $# -gt 0 ]; do
@@ -50,6 +50,7 @@ while [ $# -gt 0 ]; do
     --tdengine)         TDENGINE=1 ;;
     --minio)            MINIO=1 ;;
     --harbor)           HARBOR=1 ;;
+    --shardingsphere)   SHARDINGSPHERE=1 ;;
     --all)              ALL=1 ;;
     --ingress)          WITH_INGRESS=1 ;;
     --domain)           INGRESS_DOMAIN="$2"; shift ;;
@@ -72,6 +73,7 @@ while [ $# -gt 0 ]; do
       echo "  --tdengine          TDengine 3-node"
       echo "  --minio             MinIO 对象存储"
       echo "  --harbor            Harbor 镜像库 (+PG+Redis)"
+      echo "  --shardingsphere    ShardingSphere 多主分库 (+3xMySQL)"
       echo "  --all               全部"
       echo "  --ingress           启用 Ingress (默认 NodePort)"
       echo "  --domain <d>        Ingress 域名 (默认 registry.local)"
@@ -87,7 +89,7 @@ done
 
 # ── --all 快捷 ──
 [ -n "$ALL" ] && PG=1 MYSQL=1 REDIS=1 MINIO=1 KAFKA=1 ES=1 MONGO=1 ZK=1 \
-  NACOS=1 ROCKETMQ=1 SENTINEL=1 SKYWALKING=1 APOLLO=1 TDENGINE=1 HARBOR=1
+    NACOS=1 ROCKETMQ=1 SENTINEL=1 SKYWALKING=1 APOLLO=1 TDENGINE=1 HARBOR=1 SHARDINGSPHERE=1
 
 # ── 依赖自动推导 ──
 [ -n "$NACOS" ]   && MYSQL=1    # Nacos 需要 MySQL
@@ -95,7 +97,7 @@ done
 [ -n "$HARBOR" ]  && PG=1 REDIS=1  # Harbor 需要 PG + Redis
 
 # ── 无参数 → 显示帮助 ──
-if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR" ]; then
+if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE" ]; then
   echo "请指定要部署的组件，例如: bash $0 --mysql"
   echo "查看全部选项: bash $0 --help"
   exit 1
@@ -219,6 +221,10 @@ kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/
 [ -n "$TDENGINE" ] && step "--- TDengine 3-node ---" && \
   hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml"
 
+# -- 分库 --
+[ -n "$SHARDINGSPHERE" ] && step "--- ShardingSphere-Proxy 多主分库 ---" && \
+  kube_apply "$CFG/manifests/shardingsphere.yaml"
+
 # -- 镜像库 --
 if [ -n "$HARBOR" ]; then
   step "--- Harbor ---"
@@ -257,6 +263,7 @@ echo ""
 [ -n "$SENTINEL" ] && echo "  Sentinel   : sentinel-dashboard.$NAMESPACE.svc:8080 (sentinel / sentinel123)"
 [ -n "$SKYWALKING" ] && echo "  SkyWalking : skywalking-oap.$NAMESPACE.svc:11800"
 [ -n "$TDENGINE" ] && echo "  TDengine   : tdengine.$NAMESPACE.svc:6030 (root / taosdata)"
+[ -n "$SHARDINGSPHERE" ] && echo "  ShardingSphere : shardingsphere-proxy.$NAMESPACE.svc:3307 (MySQL协议)"
 [ -n "$HARBOR" ] && {
   [ -n "$WITH_INGRESS" ] && echo "  Harbor     : http://$INGRESS_DOMAIN (admin / $ADMIN_PASS)" \
     || echo "  Harbor     : http://${NODE_IP}:30002 (admin / $ADMIN_PASS)"
