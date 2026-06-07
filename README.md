@@ -1,5 +1,6 @@
 <div align="center">
-  <h1>🐱 Beggar</h1>
+  <img src="icon.svg" width="64" height="64" alt="Beggar logo" />
+  <h1>Beggar</h1>
   <p><strong>From bare metal to full middleware stack — one command to rule them all</strong></p>
   <p>
     <img src="https://img.shields.io/badge/Linux-%23FCC624?style=flat-square&logo=linux&logoColor=black" />
