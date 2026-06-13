@@ -1,70 +1,70 @@
-param(
+﻿param(
     [string]$Namespace = "registry-stack",
     [string]$AdminPassword = "Harbor12345",
     [string]$IngressDomain = "registry.local",
 
-    # === 组件开关（全部独立，默认OFF） ===
-    [switch]$Pg, [switch]$Postgresql,       # PostgreSQL 3-node
-    [switch]$Mysql,                          # MySQL 3-node
-    [switch]$Redis,                          # Redis 3-node Sentinel
-    [switch]$MinIO,                          # MinIO 对象存储
-    [switch]$Kafka,                          # Kafka 3-node KRaft
-    [switch]$Es, [switch]$Elasticsearch,     # Elasticsearch 3-node
-    [switch]$Mongo, [switch]$Mongodb,        # MongoDB 3-node
-    [switch]$Zk, [switch]$Zookeeper,         # ZooKeeper 3-node
-    [switch]$Nacos,                          # Nacos 3-node + MySQL
-    [switch]$RocketMQ,                       # RocketMQ 3+3
-    [switch]$Sentinel,                       # Sentinel Dashboard 2-node
-    [switch]$Skywalking,                     # SkyWalking OAP 3-node
-    [switch]$Apollo,                         # Apollo 3-node + MySQL
-    [switch]$Tdengine,                       # TDengine 3-node
-    [switch]$Harbor,                         # Harbor 镜像库 + PG + Redis
-    [switch]$Shardingsphere,                 # ShardingSphere 多主分库
-    [switch]$Shenyu,                         # ShenYu API 网关
-    [switch]$Dubbo,                          # Dubbo-Admin
-    [switch]$Seata,                          # Seata 分布式事务
-    [switch]$XxlJob,                         # XXL-JOB 分布式调度
-    [switch]$Prometheus,                     # Prometheus + Grafana
-    [switch]$Pulsar,                         # Apache Pulsar
-    [switch]$Flink,                          # Apache Flink
-    [switch]$Jenkins,                        # Jenkins CI/CD
-    [switch]$Sba, [switch]$SpringBootAdmin,  # Spring Boot Admin
-    [switch]$All,                            # 全部
-    [switch]$WithIngress,                    # 启用 Ingress
-    [switch]$DryRun                          # 校验不真跑
+    [switch]$Pg, [switch]$Postgresql,
+    [switch]$Mysql,
+    [switch]$Redis,
+    [switch]$MinIO,
+    [switch]$Kafka,
+    [switch]$Es, [switch]$Elasticsearch,
+    [switch]$Mongo, [switch]$Mongodb,
+    [switch]$Zk, [switch]$Zookeeper,
+    [switch]$Nacos,
+    [switch]$RocketMQ,
+    [switch]$Sentinel,
+    [switch]$Skywalking,
+    [switch]$Apollo,
+    [switch]$Tdengine,
+    [switch]$Harbor,
+    [switch]$Shardingsphere,
+    [switch]$Shenyu,
+    [switch]$Dubbo,
+    [switch]$Seata,
+    [switch]$XxlJob,
+    [switch]$Prometheus,
+    [switch]$Pulsar,
+    [switch]$Flink,
+    [switch]$Jenkins,
+    [switch]$Sba, [switch]$SpringBootAdmin,
+    [switch]$All,
+    [switch]$WithIngress,
+    [switch]$DryRun
 )
 
-# ── 一一映射 ──
+# alias mapping
 if ($Postgresql) { $Pg = $true }
 if ($Elasticsearch) { $Es = $true }
 if ($Mongodb) { $Mongo = $true }
 if ($Zookeeper) { $Zk = $true }
 if ($SpringBootAdmin) { $Sba = $true }
 
-# ── All 快捷 ──
+# All shortcut
 if ($All) {
     $Pg = $Mysql = $Redis = $MinIO = $Kafka = $Es = $Mongo = $Zk = $true
     $Nacos = $RocketMQ = $Sentinel = $Skywalking = $Apollo = $Tdengine = $Harbor = $Shardingsphere = $true
     $Shenyu = $Dubbo = $Seata = $XxlJob = $Prometheus = $Pulsar = $Flink = $Jenkins = $Sba = $true
 }
 
-# ── 依赖自动推导 ──
-if ($Nacos)   { $Mysql = $true }
-if ($Apollo)  { $Mysql = $true }
-if ($Harbor)  { $Pg = $true; $Redis = $true }
-if ($Dubbo)   { $Zk = $true }
-if ($XxlJob)  { $Mysql = $true }
+# dependency auto-resolve
+if ($Nacos)  { $Mysql = $true }
+if ($Apollo) { $Mysql = $true }
+if ($Harbor) { $Pg = $true; $Redis = $true }
+if ($Dubbo)  { $Zk = $true }
+if ($XxlJob) { $Mysql = $true }
 
-# ── 无参数 → 帮助 ──
 $any = $Pg -or $Mysql -or $Redis -or $MinIO -or $Kafka -or $Es -or $Mongo -or $Zk `
      -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor -or $Shardingsphere `
      -or $Shenyu -or $Dubbo -or $Seata -or $XxlJob -or $Prometheus -or $Pulsar -or $Flink -or $Jenkins -or $Sba
+
 if (-not $any) {
     Write-Host @"
-用法: .\deploy-registry-stack.ps1 [选项]
-选项:
+Usage: .\deploy-registry-stack.ps1 [options]
+
+Options:
   -Pg | -Postgresql   PostgreSQL 3-node HA
-  -Mysql              MySQL 3-node 主从
+  -Mysql              MySQL 3-node primary-replica
   -Redis              Redis 3-node Sentinel
   -Kafka              Kafka 3-node KRaft
   -Es | -Elasticsearch Elasticsearch 3-node
@@ -76,31 +76,30 @@ if (-not $any) {
   -Skywalking         SkyWalking OAP 3-node
   -Apollo             Apollo 3-node (+MySQL)
   -Tdengine           TDengine 3-node
-  -MinIO              MinIO 对象存储
-  -Harbor             Harbor 镜像库 (+PG+Redis)
-  -Shardingsphere     ShardingSphere 多主分库 (+3xMySQL)
-  -Shenyu             Apache ShenYu API 网关
+  -MinIO              MinIO S3 storage
+  -Harbor             Harbor registry (+PG+Redis)
+  -Shardingsphere     ShardingSphere proxy (+3xMySQL)
+  -Shenyu             Apache ShenYu API gateway
   -Dubbo              Apache Dubbo-Admin (+ZK)
-  -Seata              Apache Seata 分布式事务
-  -XxlJob             XXL-JOB 分布式调度 (+MySQL)
-  -Prometheus         Prometheus + Grafana 监控栈
-  -Pulsar             Apache Pulsar 消息队列
-  -Flink              Apache Flink 流计算
+  -Seata              Apache Seata distributed TX
+  -XxlJob             XXL-JOB scheduler (+MySQL)
+  -Prometheus         Prometheus + Grafana
+  -Pulsar             Apache Pulsar messaging
+  -Flink              Apache Flink stream
   -Jenkins            Jenkins CI/CD
-  -Sba | -SpringBootAdmin Spring Boot Admin 应用监控
-  -All                全部
-  -WithIngress        启用 Ingress (默认 NodePort)
-  -DryRun             校验配置不实际部署
+  -Sba | -SpringBootAdmin Spring Boot Admin
+  -All                Deploy everything
+  -WithIngress        Enable Ingress (default NodePort)
+  -DryRun             Validate only
 "@
     exit 1
 }
 
-# ── globals ──
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $CFG = "$ScriptDir/config"
 
 function step($m) { Write-Host "`n[$(Get-Date -Format HH:mm:ss)] >>> $m" -ForegroundColor Cyan }
-function ok($m)   { Write-Host "  $m 完成" -ForegroundColor Green }
+function ok($m)   { Write-Host "  $m OK" -ForegroundColor Green }
 function warn($m) { Write-Host "  [WARN] $m" -ForegroundColor Yellow }
 
 function hlm($name, $chart, $values, $extra) {
@@ -110,15 +109,15 @@ function hlm($name, $chart, $values, $extra) {
     if ($extra)  { $args += $extra }
     try {
         $out = helm $args *>&1
-        if ($LASTEXITCODE -ne 0) { warn "$name 异常"; $out | %{ Write-Host "    $_" -ForegroundColor DarkGray }; return $false }
+        if ($LASTEXITCODE -ne 0) { warn "$name error"; $out | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }; return $false }
         ok $name; return $true
-    } catch { warn "$name: $_"; return $false }
+    } catch { warn "$name : $_"; return $false }
 }
 
 function kubeApply($file) {
     if ($DryRun) { Write-Host "  [DRY-RUN] kubectl apply -f $(Split-Path $file -Leaf)" -ForegroundColor DarkGray; return }
     $out = kubectl apply -n $Namespace -f (Resolve-Path $file) 2>&1
-    if ($LASTEXITCODE -ne 0) { warn "$(Split-Path $file -Leaf) 异常" } else { ok $(Split-Path $file -Leaf) }
+    if ($LASTEXITCODE -ne 0) { warn "$(Split-Path $file -Leaf) error" } else { ok $(Split-Path $file -Leaf) }
 }
 
 function execPod($label, $cmd) {
@@ -127,23 +126,17 @@ function execPod($label, $cmd) {
     kubectl exec -n $Namespace $pod -- bash -c $cmd 2>&1 | Out-Null; return $true
 }
 
-# ════════════════════════════════
-# 0. Precheck
-# ════════════════════════════════
-step "前提检查"
-if (!(Get-Command helm -EA SilentlyContinue)) { Write-Host "需要 helm" -ForegroundColor Red; exit 1 }
-if (!(Get-Command kubectl -EA SilentlyContinue)) { Write-Host "需要 kubectl" -ForegroundColor Red; exit 1 }
+# precheck
+step "Prechecks"
+if (!(Get-Command helm -EA SilentlyContinue)) { Write-Host "Need helm" -ForegroundColor Red; exit 1 }
+if (!(Get-Command kubectl -EA SilentlyContinue)) { Write-Host "Need kubectl" -ForegroundColor Red; exit 1 }
 if (-not $DryRun) {
     kubectl cluster-info --request-timeout 5s 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Host "无法连接 K8s 集群" -ForegroundColor Red; exit 1 }
-    Write-Host "  K8s 已连接" -ForegroundColor Green
+    if ($LASTEXITCODE -ne 0) { Write-Host "No cluster connection" -ForegroundColor Red; exit 1 }
+    Write-Host "  K8s connected" -ForegroundColor Green
 }
 
 step "Helm Repos"
-@("bitnami", "elastic", "harbor", "nacos-group", "apache", "apolloconfig", "tdengine") | ForEach-Object {
-    helm repo add $_ "https://charts.$_.com" 2>$null | Out-Null
-}
-# 修复已知 repo URL
 helm repo add bitnami https://charts.bitnami.com/bitnami 2>$null | Out-Null
 helm repo add elastic https://helm.elastic.co 2>$null | Out-Null
 helm repo add harbor https://helm.goharbor.io 2>$null | Out-Null
@@ -158,12 +151,10 @@ helm repo add jenkins https://charts.jenkins.io 2>$null | Out-Null
 helm repo update 2>$null | Out-Null
 ok "Repos"
 
-step "命名空间: $Namespace"
+step "Namespace: $Namespace"
 kubectl create ns $Namespace --dry-run=client -o yaml | kubectl apply -f - 2>&1 | Out-Null
 
-# ════════════════════════════════
-# 部署
-# ════════════════════════════════
+# deploy components
 if ($Mysql) { step "--- MySQL ---"; hlm "mysql" "bitnami/mysql" "$CFG/mysql-values.yaml" $null }
 if ($Pg)    { step "--- PostgreSQL ---"; hlm "pg" "bitnami/postgresql-ha" "$CFG/postgresql-values.yaml" $null }
 if ($Redis) { step "--- Redis ---"; hlm "redis" "bitnami/redis" "$CFG/redis-values.yaml" $null }
@@ -219,10 +210,7 @@ if ($Harbor) {
     hlm "harbor" "harbor/harbor" "$CFG/harbor-values.yaml" (@("--set", "harborAdminPassword=$AdminPassword") + $extra)
 }
 
-# ════════════════════════════════
-# 摘要
-# ════════════════════════════════
-step "===== 摘要 ====="
+step "===== Summary ====="
 $nodeIP = kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>$null
 if (-not $nodeIP) { $nodeIP = "localhost" }
 Write-Host ""
@@ -239,10 +227,10 @@ if ($Sentinel)  { Write-Host "  Sentinel   : sentinel-dashboard.$Namespace.svc:8
 if ($Skywalking){ Write-Host "  SkyWalking : skywalking-oap.$Namespace.svc:11800" -ForegroundColor Green }
 if ($Apollo)    { Write-Host "  Apollo     : apollo-apollo-portal.$Namespace.svc:8070 (apollo / admin)" -ForegroundColor Green }
 if ($Tdengine)  { Write-Host "  TDengine   : tdengine.$Namespace.svc:6030 (root / taosdata)" -ForegroundColor Green }
-if ($Shardingsphere) { Write-Host "  ShardingSphere : shardingsphere-proxy.$Namespace.svc:3307 (MySQL协议)" -ForegroundColor Green }
+if ($Shardingsphere) { Write-Host "  ShardingSphere : shardingsphere-proxy.$Namespace.svc:3307 (MySQL sharding)" -ForegroundColor Green }
 if ($Shenyu)  { Write-Host "  ShenYu     : shenyu-admin.$Namespace.svc:31095 (admin / 123456)" -ForegroundColor Green }
 if ($Dubbo)   { Write-Host "  Dubbo-Admin: dubbo-admin.$Namespace.svc:8081 (root / root)" -ForegroundColor Green }
-if ($Seata)   { Write-Host "  Seata      : seata-server.$Namespace.svc:8091 (file模式)" -ForegroundColor Green }
+if ($Seata)   { Write-Host "  Seata      : seata-server.$Namespace.svc:8091 (file mode)" -ForegroundColor Green }
 if ($XxlJob)  { Write-Host "  XXL-JOB    : xxl-job-admin.$Namespace.svc:8080 (admin / 123456)" -ForegroundColor Green }
 if ($Prometheus) { Write-Host "  Prometheus : prometheus-operated.$Namespace.svc:9090" -ForegroundColor Green }
 if ($Pulsar)  { Write-Host "  Pulsar     : pulsar-broker.$Namespace.svc:6650" -ForegroundColor Green }
@@ -254,4 +242,4 @@ if ($Harbor)    { if ($WithIngress) { Write-Host "  Harbor     : http://$Ingress
 
 Write-Host ""
 kubectl get pods -n $Namespace --ignore-not-found 2>&1
-if ($DryRun) { Write-Host "`n[DRY-RUN] 未部署" -ForegroundColor Cyan }
+if ($DryRun) { Write-Host "`n[DRY-RUN] not deployed" -ForegroundColor Cyan }

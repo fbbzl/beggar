@@ -8,6 +8,7 @@ metadata:
   labels:
     app: redis
 spec:
+  clusterIP: None
   ports:
     - port: 6379
       name: redis
@@ -48,7 +49,7 @@ spec:
     spec:
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: redis:7
           command:
             - sh
             - -c
@@ -58,7 +59,7 @@ spec:
               if [ "$POD_ID" = "0" ]; then
                 redis-server /etc/redis.conf
               else
-                redis-server /etc/redis.conf --replicaof redis-0.redis 6379
+                redis-server /etc/redis.conf --replicaof redis 6379
               fi
           ports:
             - containerPort: 6379
@@ -94,14 +95,15 @@ spec:
     spec:
       containers:
         - name: sentinel
-          image: redis:7-alpine
+          image: redis:7
           command:
             - sh
             - -c
             - |
+              MASTER_IP=$(getent hosts redis | head -1 | awk '{print $1}')
               cat > /tmp/sentinel.conf <<EOF
               port 26379
-              sentinel monitor mymaster redis-0.redis 6379 2
+              sentinel monitor mymaster $MASTER_IP 6379 2
               sentinel down-after-milliseconds mymaster 5000
               sentinel failover-timeout mymaster 10000
               sentinel parallel-syncs mymaster 1

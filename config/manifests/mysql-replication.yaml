@@ -146,97 +146,96 @@ spec:
           env:
             - name: MYSQL_ROOT_PASSWORD
               value: "mysqlroot123"
-            - name: MYSQL_MASTER_HOST
-              value: "mysql-primary"
-            - name: MYSQL_REPLICATION_USER
-              value: "repl"
-            - name: MYSQL_REPLICATION_PASSWORD
-              value: "repl123"
           ports:
             - containerPort: 3306
               name: mysql
           volumeMounts:
-            - name: config
-              mountPath: /etc/mysql/conf.d/custom.cnf
-              subPath: my.cnf
             - name: data
               mountPath: /var/lib/mysql
           command:
             - bash
             - -c
             - |
-              # Generate unique server-id from pod name
-              SERVER_ID=$(echo $HOSTNAME | grep -o '[0-9]*$' | awk '{print $0+2}')
-              sed -i "s/server-id=0/server-id=$SERVER_ID/" /etc/mysql/conf.d/custom.cnf
-              
-              # Initialize data dir if empty
-              if [ ! -d /var/lib/mysql/mysql ]; then
-                mysql_install_db --user=mysql
-              fi
-              
-              # Start MySQL
-              mysqld --user=mysql &
+              set -e
+              SERVER_ID=$(expr $(echo $HOSTNAME | grep -o '[0-9]*$') + 2)
+              rm -rf /var/lib/mysql/.[!.]* /var/lib/mysql/* 2>/dev/null || true
+              mkdir -p /var/lib/mysql /var/run/mysqld
+              chown mysql:mysql /var/run/mysqld
+
+              cat > /etc/mysql/conf.d/replica.cnf <<'EOF1'
+              [mysqld]
+              server-id=SERVER_ID_PLACEHOLDER
+              log_bin=mysql-bin
+              binlog_format=ROW
+              gtid_mode=ON
+              enforce_gtid_consistency=ON
+              binlog_gtid_simple_recovery=ON
+              relay_log=relay-log
+              read_only=1
+              max_connections=200
+              bind-address=0.0.0.0
+              socket=/var/run/mysqld/mysqld.sock
+              EOF1
+              sed -i "s/SERVER_ID_PLACEHOLDER/$SERVER_ID/" /etc/mysql/conf.d/replica.cnf
+
+              mysqld --initialize-insecure --user=mysql --datadir=/var/lib/mysql
+              rm -f /var/run/mysqld/mysqld.sock 2>/dev/null || true
+
+              mysqld --defaults-file=/etc/mysql/conf.d/replica.cnf --user=mysql &
               MYSQL_PID=$!
-              
-              # Wait for MySQL to be ready
-              for i in $(seq 1 30); do
-                if mysqladmin ping -uroot -pmysqlroot123 --silent 2>/dev/null; then break; fi
+
+              for i in $(seq 1 60); do
+                if mysqladmin ping --silent 2>/dev/null; then break; fi
                 sleep 2
               done
-              
-              # Setup replication if this is a replica and not already configured
-              if ! mysql -uroot -pmysqlroot123 -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -q "Slave_IO_Running"; then
-                mysql -uroot -pmysqlroot123 -e "
-                  CHANGE MASTER TO
-                    MASTER_HOST='$MYSQL_MASTER_HOST',
-                    MASTER_USER='$MYSQL_REPLICATION_USER',
-                    MASTER_PASSWORD='$MYSQL_REPLICATION_PASSWORD',
-                    MASTER_AUTO_POSITION=1;
-                  START SLAVE;
-                " 2>/dev/null || true
-              fi
-              
+
+              mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'mysqlroot123';"
+              mysql -uroot -pmysqlroot123 -e "
+                STOP SLAVE;
+                CHANGE MASTER TO
+                  MASTER_HOST='mysql-primary',
+                  MASTER_USER='repl',
+                  MASTER_PASSWORD='repl123',
+                  MASTER_AUTO_POSITION=1,
+                  MASTER_SSL=0;
+                START SLAVE;
+                SET GLOBAL super_read_only=1;
+              " 2>/dev/null || true
+
               wait $MYSQL_PID
           livenessProbe:
             exec:
               command: ["mysqladmin", "-uroot", "-pmysqlroot123", "ping"]
             initialDelaySeconds: 30
             periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "-uroot", "-pmysqlroot123", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 5
           resources:
             requests: { memory: 256Mi, cpu: 100m }
             limits:   { memory: 512Mi, cpu: 500m }
       initContainers:
-        - name: init-replication
+        - name: init-replica
           image: mysql:8.0
           env:
             - name: MYSQL_ROOT_PASSWORD
               value: "mysqlroot123"
-            - name: MYSQL_MASTER_HOST
-              value: "mysql-primary"
-            - name: MYSQL_REPLICATION_USER
-              value: "repl"
-            - name: MYSQL_REPLICATION_PASSWORD
-              value: "repl123"
           command:
             - bash
             - -c
             - |
-              # Wait for primary to be ready
               for i in $(seq 1 30); do
                 if mysqladmin ping -h mysql-primary -uroot -pmysqlroot123 --silent 2>/dev/null; then break; fi
                 sleep 2
               done
-              
-              # Create replication user on primary
               mysql -h mysql-primary -uroot -pmysqlroot123 -e "
-                CREATE USER IF NOT EXISTS '$MYSQL_REPLICATION_USER'@'%' IDENTIFIED BY '$MYSQL_REPLICATION_PASSWORD';
-                GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO '$MYSQL_REPLICATION_USER'@'%';
+              CREATE USER IF NOT EXISTS 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'repl123';
+              ALTER USER 'repl'@'%' IDENTIFIED WITH mysql_native_password BY 'repl123';
+              GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'repl'@'%';
                 FLUSH PRIVILEGES;
               " 2>/dev/null || true
-      volumes:
-        - name: config
-          configMap:
-            name: mysql-replica-config
   volumeClaimTemplates:
     - metadata:
         name: data
