@@ -31,7 +31,7 @@ CFG="$SCRIPT_DIR/config"
 # ── 全部组件初始 OFF ──
 PG=; MYSQL=; REDIS=; MINIO=; KAFKA=; ES=; MONGO=; ZK=;
 NACOS=; ROCKETMQ=; SENTINEL=; SKYWALKING=; APOLLO=; TDENGINE=; HARBOR=; SHARDINGSPHERE=
-SHENYU=; DUBBO=; SEATA=; XXL_JOB=; PROMETHEUS=; PULSAR=; FLINK=; JENKINS=; SBA=; ALL=
+APISIX=; SHENYU=; DUBBO=; SEATA=; XXL_JOB=; PROMETHEUS=; PULSAR=; FLINK=; JENKINS=; SBA=; ALL=
 
 # ── 参数解析 ──
 while [ $# -gt 0 ]; do
@@ -52,6 +52,7 @@ while [ $# -gt 0 ]; do
     --minio)            MINIO=1 ;;
     --harbor)           HARBOR=1 ;;
     --shardingsphere)   SHARDINGSPHERE=1 ;;
+    --apisix)           APISIX=1 ;;
     --shenyu)           SHENYU=1 ;;
     --dubbo)            DUBBO=1 ;;
     --seata)            SEATA=1 ;;
@@ -85,6 +86,7 @@ while [ $# -gt 0 ]; do
       echo "  --minio             MinIO 对象存储"
       echo "  --harbor            Harbor 镜像库 (+PG+Redis)"
       echo "  --shardingsphere    ShardingSphere 多主分库 (+3xMySQL)"
+      echo "  --apisix            Apache APISIX minimum HA (2 gateways + 3 etcd)"
       echo "  --shenyu            Apache ShenYu API 网关 (+admin+bootstrap)"
       echo "  --dubbo             Apache Dubbo-Admin (+ZK)"
       echo "  --seata             Apache Seata 分布式事务 (file模式)"
@@ -110,7 +112,7 @@ done
 # ── --all 快捷 ──
 [ -n "$ALL" ] && PG=1 MYSQL=1 REDIS=1 MINIO=1 KAFKA=1 ES=1 MONGO=1 ZK=1 \
     NACOS=1 ROCKETMQ=1 SENTINEL=1 SKYWALKING=1 APOLLO=1 TDENGINE=1 HARBOR=1 SHARDINGSPHERE=1 \
-    SHENYU=1 DUBBO=1 SEATA=1 XXL_JOB=1 PROMETHEUS=1 PULSAR=1 FLINK=1 JENKINS=1 SBA=1
+    APISIX=1 SHENYU=1 DUBBO=1 SEATA=1 XXL_JOB=1 PROMETHEUS=1 PULSAR=1 FLINK=1 JENKINS=1 SBA=1
 
 # ── 依赖自动推导 ──
 [ -n "$NACOS" ]   && MYSQL=1    # Nacos 需要 MySQL
@@ -120,7 +122,7 @@ done
 [ -n "$XXL_JOB" ] && MYSQL=1    # XXL-JOB 需要 MySQL
 
 # ── 无参数 → 显示帮助 ──
-if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE$SHENYU$DUBBO$SEATA$XXL_JOB$PROMETHEUS$PULSAR$FLINK$JENKINS$SBA" ]; then
+if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE$APISIX$SHENYU$DUBBO$SEATA$XXL_JOB$PROMETHEUS$PULSAR$FLINK$JENKINS$SBA" ]; then
   echo "请指定要部署的组件，例如: bash $0 --mysql"
   echo "查看全部选项: bash $0 --help"
   exit 1
@@ -174,6 +176,7 @@ for r in bitnami:https://charts.bitnami.com/bitnami elastic:https://helm.elastic
          nacos-group:https://nacos-group.github.io/nacos-helm apache:https://apache.jfrog.io/artifactory/skywalking-helm \
          apolloconfig:https://apolloconfig.github.io/apollo-helm tdengine:https://tdengine.github.io/helm-charts \
          shenyu:https://apache.github.io/shenyu-helm-chart \
+         apisix:https://apache.github.io/apisix-helm-chart \
          prometheus-community:https://prometheus-community.github.io/helm-charts \
          apachepulsar:https://pulsar.apache.org/charts \
          jenkins:https://charts.jenkins.io; do
@@ -253,6 +256,8 @@ kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/
   kube_apply "$CFG/manifests/shardingsphere.yaml"
 
 # -- API 网关 --
+[ -n "$APISIX" ] && step "--- APISIX 网关 ---" && \
+  hlm "apisix" "apisix/apisix" "$CFG/apisix-values.yaml"
 [ -n "$SHENYU" ] && step "--- ShenYu 网关 ---" && \
   hlm "shenyu" "shenyu/shenyu" "$CFG/shenyu-values.yaml"
 
@@ -332,6 +337,7 @@ echo ""
 [ -n "$SKYWALKING" ] && echo "  SkyWalking : skywalking-oap.$NAMESPACE.svc:11800"
 [ -n "$TDENGINE" ] && echo "  TDengine   : tdengine.$NAMESPACE.svc:6030 (root / taosdata)"
 [ -n "$SHARDINGSPHERE" ] && echo "  ShardingSphere : shardingsphere-proxy.$NAMESPACE.svc:3307 (MySQL协议)"
+[ -n "$APISIX" ] && echo "  APISIX     : http://${NODE_IP}:30011"
 [ -n "$SHENYU" ]  && echo "  ShenYu     : shenyu-admin.$NAMESPACE.svc:31095 (admin / 123456)"
 [ -n "$DUBBO" ]   && echo "  Dubbo-Admin: dubbo-admin.$NAMESPACE.svc:8081 (root / root)"
 [ -n "$SEATA" ]   && echo "  Seata      : seata-server.$NAMESPACE.svc:8091 (file模式)"

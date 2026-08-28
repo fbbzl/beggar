@@ -31,6 +31,9 @@ bash deploy-k8s-cluster.sh k3d && bash deploy-registry-stack.sh --all
 # 按需组合
 bash deploy-registry-stack.sh --mysql --redis --kafka --nacos
 
+# 一条命令启动最小高可用 APISIX（2 网关 + 3 etcd，需要至少 3 个节点）
+bash deploy-registry-stack.sh --apisix
+
 # 生产环境：3 台物理机 K3s HA
 NODE_IPS=10.0.0.1,10.0.0.2,10.0.0.3 bash deploy-k8s-cluster.sh k3s
 bash deploy-registry-stack.sh --all
@@ -48,6 +51,9 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 
 # 按需组合
 .\deploy-registry-stack.ps1 -Mysql -Redis -Kafka -Nacos
+
+# 一条命令启动最小高可用 APISIX（2 网关 + 3 etcd，需要至少 3 个节点）
+.\deploy-registry-stack.ps1 -Apisix
 
 # 先校验
 .\deploy-registry-stack.ps1 -DryRun -WithAll
@@ -79,6 +85,9 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 │                                                               │
 │  流量治理 & APM ──────────────────────────────────────────   │
 │  Sentinel Dashboard(2)    SkyWalking OAP(3)                  │
+│                                                               │
+│  API 网关 ─────────────────────────────────────────────────  │
+│  APISIX HA(2 + etcd 3)    ShenYu(2 admin + 2 bootstrap)       │
 │                                                               │
 │  时序数据库 ─────────────────────────────────────────────   │
 │  TDengine(3)                                                 │
@@ -112,6 +121,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 14 | ⏱ **TDengine** | `--tdengine` | `-Tdengine` | 3 | TDengine | 时序数据库 |
 | 15 | 🔀 **ShardingSphere** | `--shardingsphere` | `-Shardingsphere` | 2 | Apache | MySQL 多主分库 |
 | 16 | 🏛 **Harbor** | `--harbor` | `-Harbor` | - | Harbor CNCF | 企业级镜像仓库 |
+| 17 | 🛣️ **APISIX HA** | `--apisix` | `-Apisix` | 2+3 | Apache | 最小高可用 API 网关 + etcd |
 | 18 | 🔗 **ShenYu** | `--shenyu` | `-Shenyu` | 2+2 | Apache | API 网关 + 管理控制台 |
 | 19 | 🔌 **Dubbo** | `--dubbo` | `-Dubbo` | 2 | Apache | RPC 框架管理端（依赖 ZK） |
 | 20 | 📋 **Seata** | `--seata` | `-Seata` | 2 | Apache | 分布式事务（file 模式） |
@@ -121,7 +131,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 24 | 🌊 **Flink** | `--flink` | `-Flink` | 1+2 | Apache | 流计算引擎 |
 | 25 | 🏗️ **Jenkins** | `--jenkins` | `-Jenkins` | 1 | Jenkins | CI/CD 持续集成 |
 | 26 | 🟢 **Spring Boot Admin** | `--spring-boot-admin` | `-Sba` | 2 | codecentric | Spring Boot 应用监控 |
-| 27 | 🎯 **全部** | `--all` | `-WithAll` | - | - | 一键全量部署 |
+| 28 | 🎯 **全部** | `--all` | `-WithAll` | - | - | 一键全量部署 |
 
 > 💡 MySQL、PostgreSQL、Redis、MinIO 使用**官方镜像**，无 Bitnami 拉取限制，国内用户友好。
 
@@ -138,6 +148,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | `30008` | Sentinel Dashboard | 流量治理控制台 |
 | `30009` | Sentinel API | 监控数据 API |
 | `30010` | RocketMQ NameServer | 消息队列客户端接入 |
+| `30011` | APISIX HTTP | API 网关入口 |
 | `30307` | ShardingSphere-Proxy | 多主分库 MySQL 协议入口 |
 
 ---
@@ -174,11 +185,16 @@ beggar/
     ├── skywalking-values.yaml        # SkyWalking 配置（依赖 ES）
     ├── apollo-values.yaml            # Apollo 配置（依赖 MySQL）
     ├── tdengine-values.yaml          # TDengine 配置
+    ├── apisix-values.yaml            # APISIX 网关配置
     ├── shenyu-values.yaml            # ShenYu 网关配置
     ├── prometheus-values.yaml        # Prometheus+Grafana 配置
     ├── pulsar-values.yaml            # Pulsar 消息队列配置
     └── jenkins-values.yaml           # Jenkins CI/CD 配置
 ```
+
+## 🛣️ APISIX 使用说明
+
+APISIX HA 与其他 Helm 中间件一样，通过 Rancher Desktop 提供的 `helm` / `kubectl` 部署；一条 `-Apisix` 命令会启动 2 个 APISIX 和 3 个 etcd。HTTP 入口为 `http://<NodeIP>:30011`；Admin API 保持 ClusterIP，仅供集群内使用。硬反亲和规则会将网关和 etcd 副本分别分散到不同节点，因此集群少于 3 个可调度节点时不会部署成功。该配置不启用 Ingress Controller；路由通过 Admin API 配置。`--all` 会同时安装 APISIX HA 和 ShenYu，但同一个外部域名/入口应只交由其中一个网关处理。
 
 ---
 

@@ -19,6 +19,7 @@
     [switch]$Tdengine,
     [switch]$Harbor,
     [switch]$Shardingsphere,
+    [switch]$Apisix,
     [switch]$Shenyu,
     [switch]$Dubbo,
     [switch]$Seata,
@@ -44,7 +45,7 @@ if ($SpringBootAdmin) { $Sba = $true }
 if ($All) {
     $Pg = $Mysql = $Redis = $MinIO = $Kafka = $Es = $Mongo = $Zk = $true
     $Nacos = $RocketMQ = $Sentinel = $Skywalking = $Apollo = $Tdengine = $Harbor = $Shardingsphere = $true
-    $Shenyu = $Dubbo = $Seata = $XxlJob = $Prometheus = $Pulsar = $Flink = $Jenkins = $Sba = $true
+    $Apisix = $Shenyu = $Dubbo = $Seata = $XxlJob = $Prometheus = $Pulsar = $Flink = $Jenkins = $Sba = $true
 }
 
 # dependency auto-resolve
@@ -56,7 +57,7 @@ if ($XxlJob) { $Mysql = $true }
 
 $any = $Pg -or $Mysql -or $Redis -or $MinIO -or $Kafka -or $Es -or $Mongo -or $Zk `
      -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor -or $Shardingsphere `
-     -or $Shenyu -or $Dubbo -or $Seata -or $XxlJob -or $Prometheus -or $Pulsar -or $Flink -or $Jenkins -or $Sba
+     -or $Apisix -or $Shenyu -or $Dubbo -or $Seata -or $XxlJob -or $Prometheus -or $Pulsar -or $Flink -or $Jenkins -or $Sba
 
 if (-not $any) {
     Write-Host @"
@@ -79,6 +80,7 @@ Options:
   -MinIO              MinIO S3 storage
   -Harbor             Harbor registry (+PG+Redis)
   -Shardingsphere     ShardingSphere proxy (+3xMySQL)
+  -Apisix             Apache APISIX minimum HA (2 gateways + 3 etcd)
   -Shenyu             Apache ShenYu API gateway
   -Dubbo              Apache Dubbo-Admin (+ZK)
   -Seata              Apache Seata distributed TX
@@ -145,6 +147,7 @@ helm repo add apache https://apache.jfrog.io/artifactory/skywalking-helm 2>$null
 helm repo add apolloconfig https://apolloconfig.github.io/apollo-helm 2>$null | Out-Null
 helm repo add tdengine https://tdengine.github.io/helm-charts 2>$null | Out-Null
 helm repo add shenyu https://apache.github.io/shenyu-helm-chart 2>$null | Out-Null
+helm repo add apisix https://apache.github.io/apisix-helm-chart 2>$null | Out-Null
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>$null | Out-Null
 helm repo add apachepulsar https://pulsar.apache.org/charts 2>$null | Out-Null
 helm repo add jenkins https://charts.jenkins.io 2>$null | Out-Null
@@ -178,6 +181,7 @@ if ($Skywalking) { step "--- SkyWalking ---"; hlm "skywalking" "apache/skywalkin
 if ($Tdengine)   { step "--- TDengine ---"; hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml" $null }
 if ($Shardingsphere) { step "--- ShardingSphere ---"; kubeApply "$CFG/manifests/shardingsphere.yaml" }
 
+if ($Apisix)     { step "--- APISIX ---"; hlm "apisix" "apisix/apisix" "$CFG/apisix-values.yaml" $null }
 if ($Shenyu)     { step "--- ShenYu ---"; hlm "shenyu" "shenyu/shenyu" "$CFG/shenyu-values.yaml" $null }
 if ($Dubbo)      { step "--- Dubbo-Admin ---"; kubeApply "$CFG/manifests/dubbo-admin.yaml" }
 if ($Seata)      { step "--- Seata ---"; kubeApply "$CFG/manifests/seata.yaml" }
@@ -228,6 +232,7 @@ if ($Skywalking){ Write-Host "  SkyWalking : skywalking-oap.$Namespace.svc:11800
 if ($Apollo)    { Write-Host "  Apollo     : apollo-apollo-portal.$Namespace.svc:8070 (apollo / admin)" -ForegroundColor Green }
 if ($Tdengine)  { Write-Host "  TDengine   : tdengine.$Namespace.svc:6030 (root / taosdata)" -ForegroundColor Green }
 if ($Shardingsphere) { Write-Host "  ShardingSphere : shardingsphere-proxy.$Namespace.svc:3307 (MySQL sharding)" -ForegroundColor Green }
+if ($Apisix)  { Write-Host "  APISIX     : http://${nodeIP}:30011" -ForegroundColor Green }
 if ($Shenyu)  { Write-Host "  ShenYu     : shenyu-admin.$Namespace.svc:31095 (admin / 123456)" -ForegroundColor Green }
 if ($Dubbo)   { Write-Host "  Dubbo-Admin: dubbo-admin.$Namespace.svc:8081 (root / root)" -ForegroundColor Green }
 if ($Seata)   { Write-Host "  Seata      : seata-server.$Namespace.svc:8091 (file mode)" -ForegroundColor Green }

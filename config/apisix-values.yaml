@@ -1,0 +1,59 @@
+# Minimum highly available APISIX: two gateway Pods plus three embedded etcd
+# Pods. Required anti-affinity prevents deployment to a single-node cluster.
+
+replicaCount: 2
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: apisix
+            app.kubernetes.io/instance: apisix
+        topologyKey: kubernetes.io/hostname
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "500m"
+
+service:
+  type: NodePort
+  http:
+    servicePort: 80
+    nodePort: 30011
+
+apisix:
+  admin:
+    enabled: true
+    type: ClusterIP
+    # The Admin API is not exposed outside the cluster.
+    allow:
+      ipList:
+        - 0.0.0.0/0
+
+# APISIX needs etcd for route and plugin configuration. Three replicas maintain
+# quorum after one member fails. The hard affinity requires three cluster nodes.
+etcd:
+  enabled: true
+  replicaCount: 3
+  persistence:
+    enabled: true
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: etcd
+              app.kubernetes.io/instance: apisix
+          topologyKey: kubernetes.io/hostname
+  pdb:
+    create: true
+    minAvailable: 2

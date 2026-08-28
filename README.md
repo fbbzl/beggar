@@ -34,6 +34,9 @@ bash deploy-k8s-cluster.sh k3d && bash deploy-registry-stack.sh --all
 # Pick what you need
 bash deploy-registry-stack.sh --mysql --redis --kafka --nacos
 
+# Start minimum-HA APISIX (2 gateways + 3 etcd; needs at least 3 nodes)
+bash deploy-registry-stack.sh --apisix
+
 # Production: 3 physical machines K3s HA
 NODE_IPS=10.0.0.1,10.0.0.2,10.0.0.3 bash deploy-k8s-cluster.sh k3s
 bash deploy-registry-stack.sh --all
@@ -51,6 +54,9 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 
 # Selective deployment
 .\deploy-registry-stack.ps1 -Mysql -Redis -Kafka -Nacos
+
+# Start minimum-HA APISIX (2 gateways + 3 etcd; needs at least 3 nodes)
+.\deploy-registry-stack.ps1 -Apisix
 
 # Dry run
 .\deploy-registry-stack.ps1 -DryRun -WithAll
@@ -82,6 +88,9 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 │                                                               │
 │  Control & APM ───────────────────────────────────────────  │
 │  Sentinel Dashboard(2)    SkyWalking OAP(3)                  │
+│                                                               │
+│  API Gateways ─────────────────────────────────────────────  │
+│  APISIX HA(2 + etcd 3)    ShenYu(2 admin + 2 bootstrap)      │
 │                                                               │
 │  Time-Series ─────────────────────────────────────────────  │
 │  TDengine(3)                                                  │
@@ -115,6 +124,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 14 | ⏱ **TDengine** | `--tdengine` | `-Tdengine` | 3 | TDengine | Time-series database |
 | 15 | 🔀 **ShardingSphere** | `--shardingsphere` | `-Shardingsphere` | 2 | Apache | MySQL sharding |
 | 16 | 🏛 **Harbor** | `--harbor` | `-Harbor` | - | Harbor CNCF | Image registry |
+| 17 | 🛣️ **APISIX HA** | `--apisix` | `-Apisix` | 2+3 | Apache | Minimum-HA API gateway + etcd |
 | 18 | 🔗 **ShenYu** | `--shenyu` | `-Shenyu` | 2+2 | Apache | API gateway + admin |
 | 19 | 🔌 **Dubbo** | `--dubbo` | `-Dubbo` | 2 | Apache | RPC admin console (+ZK) |
 | 20 | 📋 **Seata** | `--seata` | `-Seata` | 2 | Apache | Distributed transactions |
@@ -124,7 +134,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 24 | 🌊 **Flink** | `--flink` | `-Flink` | 1+2 | Apache | Stream processing |
 | 25 | 🏗️ **Jenkins** | `--jenkins` | `-Jenkins` | 1 | Jenkins | CI/CD |
 | 26 | 🟢 **Spring Boot Admin** | `--spring-boot-admin` | `-Sba` | 2 | codecentric | App monitoring |
-| 27 | 🎯 **All** | `--all` | `-WithAll` | - | - | Deploy everything |
+| 28 | 🎯 **All** | `--all` | `-WithAll` | - | - | Deploy everything |
 
 > 💡 MySQL, PostgreSQL, Redis, MinIO use **official Docker images** — no Bitnami pull limits.
 
@@ -141,6 +151,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | `30008` | Sentinel Dashboard | Flow control console |
 | `30009` | Sentinel API | Monitoring API |
 | `30010` | RocketMQ NameServer | Message queue client |
+| `30011` | APISIX HTTP | API gateway entrypoint |
 | `30307` | ShardingSphere-Proxy | MySQL sharding endpoint |
 
 ---
@@ -177,11 +188,16 @@ beggar/
     ├── skywalking-values.yaml        # SkyWalking config (needs ES)
     ├── apollo-values.yaml            # Apollo config (needs MySQL)
     ├── tdengine-values.yaml          # TDengine config
+    ├── apisix-values.yaml            # APISIX gateway config
     ├── shenyu-values.yaml            # ShenYu gateway config
     ├── prometheus-values.yaml        # Prometheus+Grafana config
     ├── pulsar-values.yaml            # Pulsar messaging config
     └── jenkins-values.yaml           # Jenkins CI/CD config
 ```
+
+## 🛣️ APISIX notes
+
+Like the other Helm middleware, APISIX HA is deployed through the `helm` / `kubectl` tools supplied by Rancher Desktop. One `-Apisix` command starts two APISIX and three etcd Pods. Its HTTP entrypoint is `http://<NodeIP>:30011`; the Admin API stays cluster-internal through a ClusterIP service. Hard pod anti-affinity spreads each APISIX and etcd replica across separate nodes, so the deployment will not complete on a cluster with fewer than three schedulable nodes. This profile does not enable an Ingress Controller; configure routes with the Admin API. `--all` installs both APISIX HA and ShenYu, but only one gateway should own a given external domain or entrypoint.
 
 ---
 
