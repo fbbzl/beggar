@@ -9,6 +9,7 @@ set -euo pipefail
 #   bash deploy-registry-stack.sh --mysql               # 只装 MySQL
 #   bash deploy-registry-stack.sh --mysql --redis       # MySQL + Redis
 #   bash deploy-registry-stack.sh --all                 # 全量
+#   bash deploy-registry-stack.sh --platform-all        # 研发平台补充工具
 #   DRY_RUN=1 bash deploy-registry-stack.sh --mysql     # 校验不真跑
 # ═══════════════════════════════════════════════════════════
 
@@ -31,7 +32,8 @@ CFG="$SCRIPT_DIR/config"
 # ── 全部组件初始 OFF ──
 PG=; MYSQL=; REDIS=; MINIO=; KAFKA=; ES=; MONGO=; ZK=;
 NACOS=; ROCKETMQ=; SENTINEL=; SKYWALKING=; APOLLO=; TDENGINE=; HARBOR=; SHARDINGSPHERE=
-APISIX=; SHENYU=; DUBBO=; SEATA=; XXL_JOB=; PROMETHEUS=; PULSAR=; FLINK=; JENKINS=; SBA=; ALL=
+APISIX=; SHENYU=; DUBBO=; SEATA=; XXL_JOB=; PROMETHEUS=; PULSAR=; FLINK=; JENKINS=; SBA=
+ETCD=; OPENBAO=; LOKI=; VELERO=; RENOVATE=; PLATFORM_ALL=; ALL=
 
 # ── 参数解析 ──
 while [ $# -gt 0 ]; do
@@ -43,6 +45,7 @@ while [ $# -gt 0 ]; do
     --es|--elasticsearch) ES=1 ;;
     --mongo|--mongodb)  MONGO=1 ;;
     --zk|--zookeeper)   ZK=1 ;;
+    --etcd)             ETCD=1 ;;
     --nacos)            NACOS=1 ;;
     --rocketmq)         ROCKETMQ=1 ;;
     --sentinel)         SENTINEL=1 ;;
@@ -63,6 +66,11 @@ while [ $# -gt 0 ]; do
     --jenkins)          JENKINS=1 ;;
     --spring-boot-admin) SBA=1 ;;
     -sba)               SBA=1 ;;
+    --openbao)          OPENBAO=1 ;;
+    --loki)             LOKI=1 ;;
+    --velero)           VELERO=1 ;;
+    --renovate)         RENOVATE=1 ;;
+    --platform-all)     PLATFORM_ALL=1 ;;
     --all)              ALL=1 ;;
     --ingress)          WITH_INGRESS=1 ;;
     --domain)           INGRESS_DOMAIN="$2"; shift ;;
@@ -77,6 +85,7 @@ while [ $# -gt 0 ]; do
       echo "  --es|--elasticsearch Elasticsearch 3-node"
       echo "  --mongo|--mongodb   MongoDB 3-node ReplicaSet"
       echo "  --zk|--zookeeper    ZooKeeper 3-node"
+      echo "  --etcd              Independent etcd 3-node cluster"
       echo "  --nacos             Nacos 3-node (+MySQL)"
       echo "  --rocketmq          RocketMQ 3+3"
       echo "  --sentinel          Sentinel Dashboard 2-node"
@@ -96,6 +105,11 @@ while [ $# -gt 0 ]; do
       echo "  --flink             Apache Flink 流计算"
       echo "  --jenkins           Jenkins CI/CD"
       echo "  --spring-boot-admin | -sba Spring Boot Admin 应用监控"
+      echo "  --openbao           OpenBao 3-node Raft secret store"
+      echo "  --loki              Loki HA + Alloy clustered log collection (+MinIO)"
+      echo "  --velero            Velero backup controller + node agents (+MinIO)"
+      echo "  --renovate          Renovate suspended CronJob"
+      echo "  --platform-all      Deploy etcd/OpenBao/Loki/Velero/Renovate"
       echo "  --all               全部"
       echo "  --ingress           启用 Ingress (默认 NodePort)"
       echo "  --domain <d>        Ingress 域名 (默认 registry.local)"
@@ -114,15 +128,20 @@ done
     NACOS=1 ROCKETMQ=1 SENTINEL=1 SKYWALKING=1 APOLLO=1 TDENGINE=1 HARBOR=1 SHARDINGSPHERE=1 \
     APISIX=1 SHENYU=1 DUBBO=1 SEATA=1 XXL_JOB=1 PROMETHEUS=1 PULSAR=1 FLINK=1 JENKINS=1 SBA=1
 
+# ── --platform-all 快捷（不改变现有 --all 的范围）──
+[ -n "$PLATFORM_ALL" ] && ETCD=1 OPENBAO=1 LOKI=1 VELERO=1 RENOVATE=1
+
 # ── 依赖自动推导 ──
 [ -n "$NACOS" ]   && MYSQL=1    # Nacos 需要 MySQL
 [ -n "$APOLLO" ]  && MYSQL=1    # Apollo 需要 MySQL
 [ -n "$HARBOR" ]  && PG=1 REDIS=1  # Harbor 需要 PG + Redis
 [ -n "$DUBBO" ]   && ZK=1       # Dubbo 需要 ZK 作为注册中心
 [ -n "$XXL_JOB" ] && MYSQL=1    # XXL-JOB 需要 MySQL
+[ -n "$LOKI" ]    && MINIO=1    # Loki 使用 S3 对象存储
+[ -n "$VELERO" ]  && MINIO=1    # Velero 使用 S3 备份存储
 
 # ── 无参数 → 显示帮助 ──
-if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE$APISIX$SHENYU$DUBBO$SEATA$XXL_JOB$PROMETHEUS$PULSAR$FLINK$JENKINS$SBA" ]; then
+if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE$APISIX$SHENYU$DUBBO$SEATA$XXL_JOB$PROMETHEUS$PULSAR$FLINK$JENKINS$SBA$ETCD$OPENBAO$LOKI$VELERO$RENOVATE" ]; then
   echo "请指定要部署的组件，例如: bash $0 --mysql"
   echo "查看全部选项: bash $0 --help"
   exit 1
@@ -155,6 +174,7 @@ kube_apply() {
 }
 
 exec_pod() {
+  [ -n "$DRY_RUN" ] && return 0
   local pod; pod=$(kubectl get pod -n "$NAMESPACE" -l "$1" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
   [ -z "$pod" ] && return 1
   kubectl exec -n "$NAMESPACE" "$pod" -- bash -c "$2" &>/dev/null || true
@@ -177,6 +197,10 @@ for r in bitnami:https://charts.bitnami.com/bitnami elastic:https://helm.elastic
          apolloconfig:https://apolloconfig.github.io/apollo-helm tdengine:https://tdengine.github.io/helm-charts \
          shenyu:https://apache.github.io/shenyu-helm-chart \
          apisix:https://apache.github.io/apisix-helm-chart \
+         openbao:https://openbao.github.io/openbao-helm \
+         grafana-community:https://grafana-community.github.io/helm-charts \
+         grafana:https://grafana.github.io/helm-charts \
+         vmware-tanzu:https://vmware-tanzu.github.io/helm-charts \
          prometheus-community:https://prometheus-community.github.io/helm-charts \
          apachepulsar:https://pulsar.apache.org/charts \
          jenkins:https://charts.jenkins.io; do
@@ -186,7 +210,11 @@ helm repo update 2>/dev/null || true
 ok "Repos 就绪"
 
 step "命名空间: $NAMESPACE"
-kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/dev/null
+if [ -n "$DRY_RUN" ]; then
+  echo -e "  ${GRAY}[DRY-RUN] kubectl create namespace $NAMESPACE${NC}"
+else
+  kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/dev/null
+fi
 
 # ══════════════════════════════════
 # 逐组件部署
@@ -210,7 +238,7 @@ kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/
   hlm "redis" "bitnami/redis" "$CFG/redis-values.yaml"
 
 [ -n "$MINIO" ] && step "--- MinIO ---" && \
-  hlm "minio" "bitnami/minio" "" "--set auth.rootUser=minioadmin,auth.rootPassword=minioadmin --set persistence.size=50Gi --set defaultBuckets=harbor"
+  hlm "minio" "bitnami/minio" "$CFG/minio-values.yaml" --wait-for-jobs
 
 # -- 存储 / 协调 --
 [ -n "$ES" ]    && step "--- Elasticsearch 3-node ---" && \
@@ -219,6 +247,8 @@ kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/
   hlm "mongodb" "bitnami/mongodb" "$CFG/mongodb-values.yaml"
 [ -n "$ZK" ]    && step "--- ZooKeeper 3-node ---" && \
   hlm "zookeeper" "bitnami/zookeeper" "$CFG/zookeeper-values.yaml"
+[ -n "$ETCD" ]  && step "--- Independent etcd 3-node ---" && \
+  hlm "etcd" "bitnami/etcd" "$CFG/etcd-values.yaml"
 
 # -- 消息 --
 [ -n "$KAFKA" ]    && step "--- Kafka 3-node ---" && \
@@ -247,6 +277,10 @@ kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/
 [ -n "$SKYWALKING" ] && step "--- SkyWalking 3-node ---" && \
   hlm "skywalking" "apache/skywalking-helm" "$CFG/skywalking-values.yaml"
 
+# -- 密钥管理 --
+[ -n "$OPENBAO" ] && step "--- OpenBao 3-node Raft ---" && \
+  hlm "openbao" "openbao/openbao" "$CFG/openbao-values.yaml" --timeout 15m
+
 # -- 时序 --
 [ -n "$TDENGINE" ] && step "--- TDengine 3-node ---" && \
   hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml"
@@ -271,9 +305,11 @@ kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/
 
 # -- 分布式调度 --
 [ -n "$XXL_JOB" ] && step "--- XXL-JOB ---" && {
-  MYSQL_POD=$(kubectl get pod -n "$NAMESPACE" -l "app.kubernetes.io/component=primary" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  if [ -n "$MYSQL_POD" ]; then
-    kubectl exec -i -n "$NAMESPACE" "$MYSQL_POD" -- mysql -uroot -pmysqlroot123 < "$CFG/manifests/xxl-job-init.sql" 2>/dev/null || true
+  if [ -z "$DRY_RUN" ]; then
+    MYSQL_POD=$(kubectl get pod -n "$NAMESPACE" -l "app.kubernetes.io/component=primary" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -n "$MYSQL_POD" ]; then
+      kubectl exec -i -n "$NAMESPACE" "$MYSQL_POD" -- mysql -uroot -pmysqlroot123 < "$CFG/manifests/xxl-job-init.sql" 2>/dev/null || true
+    fi
   fi
   kube_apply "$CFG/manifests/xxl-job.yaml"
 }
@@ -281,6 +317,19 @@ kubectl create ns "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - &>/
 # -- 监控 --
 [ -n "$PROMETHEUS" ] && step "--- Prometheus + Grafana ---" && \
   hlm "prometheus" "prometheus-community/kube-prometheus-stack" "$CFG/prometheus-values.yaml"
+
+# -- 日志 --
+if [ -n "$LOKI" ]; then
+  step "--- Loki HA + Grafana Alloy ---"
+  hlm "loki" "grafana-community/loki" "$CFG/loki-values.yaml" --timeout 15m
+  hlm "alloy" "grafana/alloy" "$CFG/alloy-values.yaml"
+fi
+
+# -- 备份 / 依赖更新 --
+[ -n "$VELERO" ] && step "--- Velero ---" && \
+  hlm "velero" "vmware-tanzu/velero" "$CFG/velero-values.yaml" --timeout 15m
+[ -n "$RENOVATE" ] && step "--- Renovate CronJob ---" && \
+  hlm "renovate" "oci://ghcr.io/renovatebot/charts/renovate" "$CFG/renovate-values.yaml"
 
 # -- 消息队列 --
 [ -n "$PULSAR" ] && step "--- Pulsar ---" && \
@@ -320,7 +369,11 @@ fi
 # 摘要
 # ══════════════════════════════════
 step "===== 部署摘要 ====="
-NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "localhost")
+if [ -n "$DRY_RUN" ]; then
+  NODE_IP="localhost"
+else
+  NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "localhost")
+fi
 echo ""
 [ -n "$PG" ]  && echo "  PostgreSQL : pg-postgresql-ha-pgpool.$NAMESPACE.svc:5432 (harbor / harbordb123)"
 [ -n "$MYSQL" ] && echo "  MySQL      : mysql-mysql-primary.$NAMESPACE.svc:3306 (root / mysqlroot123)"
@@ -329,12 +382,14 @@ echo ""
 [ -n "$ES" ]    && echo "  ES         : elasticsearch-master.$NAMESPACE.svc:9200"
 [ -n "$MONGO" ] && echo "  MongoDB    : mongodb.$NAMESPACE.svc:27017 (root / mongoroot123)"
 [ -n "$ZK" ]    && echo "  ZooKeeper  : zookeeper.$NAMESPACE.svc:2181"
+[ -n "$ETCD" ]  && echo "  etcd       : etcd.$NAMESPACE.svc:2379 (root / etcdroot123)"
 [ -n "$KAFKA" ] && echo "  Kafka      : kafka-kafka-bootstrap.$NAMESPACE.svc:9092"
 [ -n "$ROCKETMQ" ] && echo "  RocketMQ NS: rocketmq-namesrv.$NAMESPACE.svc:9876"
 [ -n "$NACOS" ] && echo "  Nacos      : nacos.$NAMESPACE.svc:8848 (nacos / nacos)"
 [ -n "$APOLLO" ] && echo "  Apollo     : apollo-apollo-portal.$NAMESPACE.svc:8070 (apollo / admin)"
 [ -n "$SENTINEL" ] && echo "  Sentinel   : sentinel-dashboard.$NAMESPACE.svc:8080 (sentinel / sentinel123)"
 [ -n "$SKYWALKING" ] && echo "  SkyWalking : skywalking-oap.$NAMESPACE.svc:11800"
+[ -n "$OPENBAO" ] && echo "  OpenBao    : openbao.$NAMESPACE.svc:8200 (等待 init/unseal)"
 [ -n "$TDENGINE" ] && echo "  TDengine   : tdengine.$NAMESPACE.svc:6030 (root / taosdata)"
 [ -n "$SHARDINGSPHERE" ] && echo "  ShardingSphere : shardingsphere-proxy.$NAMESPACE.svc:3307 (MySQL协议)"
 [ -n "$APISIX" ] && echo "  APISIX     : http://${NODE_IP}:30011"
@@ -343,6 +398,9 @@ echo ""
 [ -n "$SEATA" ]   && echo "  Seata      : seata-server.$NAMESPACE.svc:8091 (file模式)"
 [ -n "$XXL_JOB" ] && echo "  XXL-JOB    : xxl-job-admin.$NAMESPACE.svc:8080 (admin / 123456)"
 [ -n "$PROMETHEUS" ] && echo "  Prometheus : prometheus-operated.$NAMESPACE.svc:9090"
+[ -n "$LOKI" ]    && echo "  Loki       : loki-gateway.$NAMESPACE.svc:80 (Alloy 2 replicas)"
+[ -n "$VELERO" ]  && echo "  Velero     : controller + node-agent (尚未创建备份计划)"
+[ -n "$RENOVATE" ] && echo "  Renovate   : suspended CronJob (等待 Secret 后启用)"
 [ -n "$PULSAR" ]  && echo "  Pulsar     : pulsar-broker.$NAMESPACE.svc:6650"
 [ -n "$FLINK" ]   && echo "  Flink      : flink-jobmanager.$NAMESPACE.svc:8081"
 [ -n "$JENKINS" ] && echo "  Jenkins    : jenkins.$NAMESPACE.svc:8080 (admin / admin123)"
@@ -353,5 +411,5 @@ echo ""
 }
 
 echo ""
-kubectl get pods -n "$NAMESPACE" --ignore-not-found 2>/dev/null
+[ -z "$DRY_RUN" ] && kubectl get pods -n "$NAMESPACE" --ignore-not-found 2>/dev/null
 [ -n "$DRY_RUN" ] && echo -e "\n${CYAN}[DRY-RUN] 未执行实际部署${NC}"

@@ -1,0 +1,66 @@
+# Minimum highly available OpenBao using integrated Raft storage. Installation
+# deliberately leaves the cluster uninitialized and sealed; see the README for
+# the one-time initialization and unseal procedure.
+
+injector:
+  enabled: false
+
+ui:
+  enabled: true
+
+server:
+  dataStorage:
+    enabled: true
+    size: 10Gi
+
+  readinessProbe:
+    enabled: true
+    # Let Helm finish while OpenBao is waiting for the required manual
+    # initialization/unseal operation.
+    path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+
+  standalone:
+    enabled: false
+
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = true
+
+        listener "tcp" {
+          tls_disable     = 1
+          address         = "[::]:8200"
+          cluster_address = "[::]:8201"
+        }
+
+        storage "raft" {
+          path = "/openbao/data"
+        }
+
+        service_registration "kubernetes" {}
+
+  disruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+
+  affinity: |
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ template "openbao.name" . }}
+              app.kubernetes.io/instance: "{{ .Release.Name }}"
+              component: server
+          topologyKey: kubernetes.io/hostname
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

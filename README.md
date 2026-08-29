@@ -37,6 +37,9 @@ bash deploy-registry-stack.sh --mysql --redis --kafka --nacos
 # Start minimum-HA APISIX (2 gateways + 3 etcd; needs at least 3 nodes)
 bash deploy-registry-stack.sh --apisix
 
+# Add the platform toolchain (etcd/OpenBao/Loki/Velero/Renovate)
+bash deploy-registry-stack.sh --platform-all
+
 # Production: 3 physical machines K3s HA
 NODE_IPS=10.0.0.1,10.0.0.2,10.0.0.3 bash deploy-k8s-cluster.sh k3s
 bash deploy-registry-stack.sh --all
@@ -58,6 +61,9 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 # Start minimum-HA APISIX (2 gateways + 3 etcd; needs at least 3 nodes)
 .\deploy-registry-stack.ps1 -Apisix
 
+# Add the platform toolchain
+.\deploy-registry-stack.ps1 -PlatformAll
+
 # Dry run
 .\deploy-registry-stack.ps1 -DryRun -WithAll
 ```
@@ -78,7 +84,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 │  PostgreSQL(3)    MySQL(3)    Redis(3)    MinIO              │
 │                                                               │
 │  Storage & Coordination ──────────────────────────────────  │
-│  Elasticsearch(3)  MongoDB(3)  ZooKeeper(3)                  │
+│  Elasticsearch(3)  MongoDB(3)  ZooKeeper(3)  etcd(3)         │
 │                                                               │
 │  Messaging ───────────────────────────────────────────────  │
 │  Kafka KRaft(3)    RocketMQ(3NS + 3Broker)                   │
@@ -98,7 +104,10 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 │  Registry ────────────────────────────────────────────────  │
 │  Harbor (image registry)                                     │
 │                                                               │
-│  🛡  All components ≥ 3 nodes · Split-brain safe             │
+│  Platform engineering ────────────────────────────────────  │
+│  OpenBao(3)  Loki HA + Alloy(2)  Velero  Renovate CronJob    │
+│                                                               │
+│  🛡  HA profiles use PDBs/anti-affinity; see exceptions below│
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -134,9 +143,15 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 24 | 🌊 **Flink** | `--flink` | `-Flink` | 1+2 | Apache | Stream processing |
 | 25 | 🏗️ **Jenkins** | `--jenkins` | `-Jenkins` | 1 | Jenkins | CI/CD |
 | 26 | 🟢 **Spring Boot Admin** | `--spring-boot-admin` | `-Sba` | 2 | codecentric | App monitoring |
-| 28 | 🎯 **All** | `--all` | `-WithAll` | - | - | Deploy everything |
+| 27 | 🧱 **Independent etcd** | `--etcd` | `-Etcd` | 3 | Bitnami/etcd | Standalone coordination store; not shared with APISIX |
+| 28 | 🔐 **OpenBao** | `--openbao` | `-OpenBao` | 3 | OpenBao | Raft secret store; manual init/unseal |
+| 29 | 🪵 **Loki + Alloy** | `--loki` | `-Loki` | 3+3+3+2+2 | Grafana | HA log store and clustered collection (+MinIO/S3) |
+| 30 | 💾 **Velero** | `--velero` | `-Velero` | 1+DaemonSet | Velero | Kubernetes backup controller and node agents (+MinIO/S3) |
+| 31 | 🤖 **Renovate** | `--renovate` | `-Renovate` | CronJob | Renovate | Dependency updates; suspended by default |
+| 32 | 🧰 **Platform tools** | `--platform-all` | `-PlatformAll` | - | - | Deploy rows 27–31; leaves `--all` unchanged |
+| 33 | 🎯 **All** | `--all` | `-WithAll` | - | - | Deploy the original middleware set |
 
-> 💡 MySQL, PostgreSQL, Redis, MinIO use **official Docker images** — no Bitnami pull limits.
+> 💡 `--loki` and `--velero` automatically include MinIO. `--platform-all` contains only the new platform tools and does not expand the existing `--all` set.
 
 ---
 
@@ -185,10 +200,17 @@ beggar/
     ├── nacos-values.yaml             # Nacos config (needs MySQL)
     ├── mongodb-values.yaml           # MongoDB config
     ├── zookeeper-values.yaml         # ZooKeeper config
+    ├── etcd-values.yaml              # Independent 3-node etcd
+    ├── minio-values.yaml             # MinIO and shared buckets
     ├── skywalking-values.yaml        # SkyWalking config (needs ES)
     ├── apollo-values.yaml            # Apollo config (needs MySQL)
     ├── tdengine-values.yaml          # TDengine config
     ├── apisix-values.yaml            # APISIX gateway config
+    ├── openbao-values.yaml           # OpenBao 3-node Raft
+    ├── loki-values.yaml              # Loki SimpleScalable HA
+    ├── alloy-values.yaml             # Clustered Alloy collectors
+    ├── velero-values.yaml            # Velero + MinIO/S3
+    ├── renovate-values.yaml          # Suspended Renovate CronJob
     ├── shenyu-values.yaml            # ShenYu gateway config
     ├── prometheus-values.yaml        # Prometheus+Grafana config
     ├── pulsar-values.yaml            # Pulsar messaging config
@@ -198,6 +220,55 @@ beggar/
 ## 🛣️ APISIX notes
 
 Like the other Helm middleware, APISIX HA is deployed through the `helm` / `kubectl` tools supplied by Rancher Desktop. One `-Apisix` command starts two APISIX and three etcd Pods. Its HTTP entrypoint is `http://<NodeIP>:30011`; the Admin API stays cluster-internal through a ClusterIP service. Hard pod anti-affinity spreads each APISIX and etcd replica across separate nodes, so the deployment will not complete on a cluster with fewer than three schedulable nodes. This profile does not enable an Ingress Controller; configure routes with the Admin API. `--all` installs both APISIX HA and ShenYu, but only one gateway should own a given external domain or entrypoint.
+
+## 🧰 Platform tool notes
+
+Install all five additions in one command. Loki and Velero automatically include MinIO in the same namespace:
+
+```bash
+bash deploy-registry-stack.sh --platform-all
+# Windows: .\deploy-registry-stack.ps1 -PlatformAll
+```
+
+Independent etcd uses three replicas, hard anti-affinity, and a PDB with `minAvailable: 2`. Its endpoint is `etcd.registry-stack.svc:2379`, and it never replaces APISIX's bundled etcd. The repository password is only a local/demo default; change `config/etcd-values.yaml` before using a shared environment.
+
+OpenBao intentionally remains uninitialized and sealed after installation. Securely retain the recovery keys and root token from the first command, then initialize one node, join the two followers to Raft, and unseal each node:
+
+```bash
+kubectl exec -n registry-stack openbao-0 -- bao operator init -key-shares=3 -key-threshold=2
+kubectl exec -n registry-stack openbao-0 -- bao operator unseal '<KEY_1>'
+kubectl exec -n registry-stack openbao-0 -- bao operator unseal '<KEY_2>'
+
+kubectl exec -n registry-stack openbao-1 -- bao operator raft join http://openbao-0.openbao-internal:8200
+kubectl exec -n registry-stack openbao-1 -- bao operator unseal '<KEY_1>'
+kubectl exec -n registry-stack openbao-1 -- bao operator unseal '<KEY_2>'
+kubectl exec -n registry-stack openbao-2 -- bao operator raft join http://openbao-0.openbao-internal:8200
+kubectl exec -n registry-stack openbao-2 -- bao operator unseal '<KEY_1>'
+kubectl exec -n registry-stack openbao-2 -- bao operator unseal '<KEY_2>'
+kubectl exec -n registry-stack openbao-0 -- bao operator raft list-peers
+```
+
+Loki runs SimpleScalable with three write, read, and backend replicas plus two gateway and two Alloy replicas. Alloy clustering shards Pod-log targets to prevent duplicate collection. The default MinIO profile remains a single-replica development dependency, so this provides Loki compute-plane HA, not end-to-end storage HA. Point `config/loki-values.yaml` and `config/velero-values.yaml` at an external HA S3 service for production.
+
+Velero installation does not create or run any backup or restore. After validating external object storage, use the Velero CLI to opt into a schedule:
+
+```bash
+velero schedule create registry-stack-daily --schedule "0 3 * * *" --include-namespaces registry-stack
+velero backup get
+# Restore is destructive; verify the backup and target cluster first.
+velero restore create --from-backup '<BACKUP_NAME>'
+```
+
+The official Velero server currently uses one controller and has no leader election. This project does not scale it unsafely to pretend it is HA. Kubernetes can recreate the Deployment after a node failure and node-agent covers every node, but controller operations pause briefly during failover.
+
+Renovate is installed as a suspended CronJob and cannot access repositories without credentials. Create a GitHub Secret and explicitly enable it:
+
+```bash
+kubectl create secret generic renovate-credentials -n registry-stack \
+  --from-literal=RENOVATE_PLATFORM=github \
+  --from-literal=RENOVATE_TOKEN='<TOKEN>'
+kubectl patch cronjob renovate -n registry-stack --type merge -p '{"spec":{"suspend":false}}'
+```
 
 ---
 

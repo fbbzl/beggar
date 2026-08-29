@@ -1,0 +1,11 @@
+# Shared development S3 storage used by Harbor, Loki and Velero.
+
+auth:
+  rootUser: minioadmin
+  rootPassword: minioadmin
+
+persistence:
+  enabled: true
+  size: 50Gi
+
+defaultBuckets: "harbor,loki-chunks,loki-ruler,loki-admin,velero"

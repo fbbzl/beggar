@@ -11,6 +11,7 @@
     [switch]$Es, [switch]$Elasticsearch,
     [switch]$Mongo, [switch]$Mongodb,
     [switch]$Zk, [switch]$Zookeeper,
+    [switch]$Etcd,
     [switch]$Nacos,
     [switch]$RocketMQ,
     [switch]$Sentinel,
@@ -29,6 +30,12 @@
     [switch]$Flink,
     [switch]$Jenkins,
     [switch]$Sba, [switch]$SpringBootAdmin,
+    [switch]$OpenBao,
+    [switch]$Loki,
+    [switch]$Velero,
+    [switch]$Renovate,
+    [switch]$PlatformAll,
+    [Alias("WithAll")]
     [switch]$All,
     [switch]$WithIngress,
     [switch]$DryRun
@@ -48,16 +55,24 @@ if ($All) {
     $Apisix = $Shenyu = $Dubbo = $Seata = $XxlJob = $Prometheus = $Pulsar = $Flink = $Jenkins = $Sba = $true
 }
 
+# Platform shortcut; intentionally does not change the existing -All scope.
+if ($PlatformAll) {
+    $Etcd = $OpenBao = $Loki = $Velero = $Renovate = $true
+}
+
 # dependency auto-resolve
 if ($Nacos)  { $Mysql = $true }
 if ($Apollo) { $Mysql = $true }
 if ($Harbor) { $Pg = $true; $Redis = $true }
 if ($Dubbo)  { $Zk = $true }
 if ($XxlJob) { $Mysql = $true }
+if ($Loki)   { $MinIO = $true }
+if ($Velero) { $MinIO = $true }
 
 $any = $Pg -or $Mysql -or $Redis -or $MinIO -or $Kafka -or $Es -or $Mongo -or $Zk `
      -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor -or $Shardingsphere `
-     -or $Apisix -or $Shenyu -or $Dubbo -or $Seata -or $XxlJob -or $Prometheus -or $Pulsar -or $Flink -or $Jenkins -or $Sba
+     -or $Apisix -or $Shenyu -or $Dubbo -or $Seata -or $XxlJob -or $Prometheus -or $Pulsar -or $Flink -or $Jenkins -or $Sba `
+     -or $Etcd -or $OpenBao -or $Loki -or $Velero -or $Renovate
 
 if (-not $any) {
     Write-Host @"
@@ -71,6 +86,7 @@ Options:
   -Es | -Elasticsearch Elasticsearch 3-node
   -Mongo | -Mongodb   MongoDB 3-node ReplicaSet
   -Zk | -Zookeeper    ZooKeeper 3-node
+  -Etcd               Independent etcd 3-node cluster
   -Nacos              Nacos 3-node (+MySQL)
   -RocketMQ           RocketMQ 3+3
   -Sentinel           Sentinel Dashboard 2-node
@@ -90,6 +106,11 @@ Options:
   -Flink              Apache Flink stream
   -Jenkins            Jenkins CI/CD
   -Sba | -SpringBootAdmin Spring Boot Admin
+  -OpenBao            OpenBao 3-node Raft secret store
+  -Loki               Loki HA + Alloy clustered log collection (+MinIO)
+  -Velero             Velero backup controller + node agents (+MinIO)
+  -Renovate           Renovate suspended CronJob
+  -PlatformAll        Deploy etcd/OpenBao/Loki/Velero/Renovate
   -All                Deploy everything
   -WithIngress        Enable Ingress (default NodePort)
   -DryRun             Validate only
@@ -123,6 +144,7 @@ function kubeApply($file) {
 }
 
 function execPod($label, $cmd) {
+    if ($DryRun) { return $true }
     $pod = kubectl get pod -n $Namespace -l $label -o jsonpath='{.items[0].metadata.name}' 2>$null
     if (-not $pod) { return $false }
     kubectl exec -n $Namespace $pod -- bash -c $cmd 2>&1 | Out-Null; return $true
@@ -148,6 +170,10 @@ helm repo add apolloconfig https://apolloconfig.github.io/apollo-helm 2>$null | 
 helm repo add tdengine https://tdengine.github.io/helm-charts 2>$null | Out-Null
 helm repo add shenyu https://apache.github.io/shenyu-helm-chart 2>$null | Out-Null
 helm repo add apisix https://apache.github.io/apisix-helm-chart 2>$null | Out-Null
+helm repo add openbao https://openbao.github.io/openbao-helm 2>$null | Out-Null
+helm repo add grafana-community https://grafana-community.github.io/helm-charts 2>$null | Out-Null
+helm repo add grafana https://grafana.github.io/helm-charts 2>$null | Out-Null
+helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts 2>$null | Out-Null
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>$null | Out-Null
 helm repo add apachepulsar https://pulsar.apache.org/charts 2>$null | Out-Null
 helm repo add jenkins https://charts.jenkins.io 2>$null | Out-Null
@@ -155,17 +181,22 @@ helm repo update 2>$null | Out-Null
 ok "Repos"
 
 step "Namespace: $Namespace"
-kubectl create ns $Namespace --dry-run=client -o yaml | kubectl apply -f - 2>&1 | Out-Null
+if ($DryRun) {
+    Write-Host "  [DRY-RUN] kubectl create namespace $Namespace" -ForegroundColor DarkGray
+} else {
+    kubectl create ns $Namespace --dry-run=client -o yaml | kubectl apply -f - 2>&1 | Out-Null
+}
 
 # deploy components
 if ($Mysql) { step "--- MySQL ---"; hlm "mysql" "bitnami/mysql" "$CFG/mysql-values.yaml" $null }
 if ($Pg)    { step "--- PostgreSQL ---"; hlm "pg" "bitnami/postgresql-ha" "$CFG/postgresql-values.yaml" $null }
 if ($Redis) { step "--- Redis ---"; hlm "redis" "bitnami/redis" "$CFG/redis-values.yaml" $null }
-if ($MinIO) { step "--- MinIO ---"; hlm "minio" "bitnami/minio" $null @("--set", "auth.rootUser=minioadmin,auth.rootPassword=minioadmin", "--set", "persistence.size=50Gi", "--set", "defaultBuckets=harbor") }
+if ($MinIO) { step "--- MinIO ---"; hlm "minio" "bitnami/minio" "$CFG/minio-values.yaml" @("--wait-for-jobs") }
 
 if ($Es)    { step "--- Elasticsearch ---"; hlm "elasticsearch" "elastic/elasticsearch" "$CFG/elasticsearch-values.yaml" $null }
 if ($Mongo) { step "--- MongoDB ---"; hlm "mongodb" "bitnami/mongodb" "$CFG/mongodb-values.yaml" $null }
 if ($Zk)    { step "--- ZooKeeper ---"; hlm "zookeeper" "bitnami/zookeeper" "$CFG/zookeeper-values.yaml" $null }
+if ($Etcd)  { step "--- Independent etcd ---"; hlm "etcd" "bitnami/etcd" "$CFG/etcd-values.yaml" $null }
 
 if ($Kafka)    { step "--- Kafka ---"; hlm "kafka" "bitnami/kafka" "$CFG/kafka-values.yaml" $null }
 if ($RocketMQ) { step "--- RocketMQ ---"; kubeApply "$CFG/manifests/rocketmq.yaml" }
@@ -178,6 +209,7 @@ if ($Apollo) { step "--- Apollo ---"
 }
 if ($Sentinel)   { step "--- Sentinel ---"; kubeApply "$CFG/manifests/sentinel-dashboard.yaml" }
 if ($Skywalking) { step "--- SkyWalking ---"; hlm "skywalking" "apache/skywalking-helm" "$CFG/skywalking-values.yaml" $null }
+if ($OpenBao) { step "--- OpenBao ---"; hlm "openbao" "openbao/openbao" "$CFG/openbao-values.yaml" @("--timeout", "15m") }
 if ($Tdengine)   { step "--- TDengine ---"; hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml" $null }
 if ($Shardingsphere) { step "--- ShardingSphere ---"; kubeApply "$CFG/manifests/shardingsphere.yaml" }
 
@@ -186,13 +218,22 @@ if ($Shenyu)     { step "--- ShenYu ---"; hlm "shenyu" "shenyu/shenyu" "$CFG/she
 if ($Dubbo)      { step "--- Dubbo-Admin ---"; kubeApply "$CFG/manifests/dubbo-admin.yaml" }
 if ($Seata)      { step "--- Seata ---"; kubeApply "$CFG/manifests/seata.yaml" }
 if ($XxlJob)     { step "--- XXL-JOB ---"
-    $mysqlPod = kubectl get pod -n $Namespace -l "app.kubernetes.io/component=primary" -o jsonpath='{.items[0].metadata.name}' 2>$null
-    if ($mysqlPod) {
-        Get-Content "$CFG/manifests/xxl-job-init.sql" -Raw | kubectl exec -i -n $Namespace $mysqlPod -- mysql -uroot -pmysqlroot123 2>$null | Out-Null
+    if (-not $DryRun) {
+        $mysqlPod = kubectl get pod -n $Namespace -l "app.kubernetes.io/component=primary" -o jsonpath='{.items[0].metadata.name}' 2>$null
+        if ($mysqlPod) {
+            Get-Content "$CFG/manifests/xxl-job-init.sql" -Raw | kubectl exec -i -n $Namespace $mysqlPod -- mysql -uroot -pmysqlroot123 2>$null | Out-Null
+        }
     }
     kubeApply "$CFG/manifests/xxl-job.yaml"
 }
 if ($Prometheus) { step "--- Prometheus+Grafana ---"; hlm "prometheus" "prometheus-community/kube-prometheus-stack" "$CFG/prometheus-values.yaml" $null }
+if ($Loki) {
+    step "--- Loki HA + Grafana Alloy ---"
+    hlm "loki" "grafana-community/loki" "$CFG/loki-values.yaml" @("--timeout", "15m")
+    hlm "alloy" "grafana/alloy" "$CFG/alloy-values.yaml" $null
+}
+if ($Velero) { step "--- Velero ---"; hlm "velero" "vmware-tanzu/velero" "$CFG/velero-values.yaml" @("--timeout", "15m") }
+if ($Renovate) { step "--- Renovate CronJob ---"; hlm "renovate" "oci://ghcr.io/renovatebot/charts/renovate" "$CFG/renovate-values.yaml" $null }
 if ($Pulsar)     { step "--- Pulsar ---"; hlm "pulsar" "apachepulsar/pulsar" "$CFG/pulsar-values.yaml" @("--timeout", "15m") }
 if ($Flink)      { step "--- Flink ---"; kubeApply "$CFG/manifests/flink.yaml" }
 if ($Jenkins)    { step "--- Jenkins ---"; hlm "jenkins" "jenkins/jenkins" "$CFG/jenkins-values.yaml" $null }
@@ -215,7 +256,7 @@ if ($Harbor) {
 }
 
 step "===== Summary ====="
-$nodeIP = kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>$null
+$nodeIP = if ($DryRun) { "localhost" } else { kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>$null }
 if (-not $nodeIP) { $nodeIP = "localhost" }
 Write-Host ""
 if ($Pg)  { Write-Host "  PostgreSQL : pg-postgresql-ha-pgpool.$Namespace.svc:5432 (harbor / harbordb123)" -ForegroundColor Green }
@@ -225,10 +266,12 @@ if ($Kafka) { Write-Host "  Kafka      : kafka-kafka-bootstrap.$Namespace.svc:90
 if ($Es)    { Write-Host "  ES         : elasticsearch-master.$Namespace.svc:9200" -ForegroundColor Green }
 if ($Mongo) { Write-Host "  MongoDB    : mongodb.$Namespace.svc:27017 (root / mongoroot123)" -ForegroundColor Green }
 if ($Zk)    { Write-Host "  ZooKeeper  : zookeeper.$Namespace.svc:2181" -ForegroundColor Green }
+if ($Etcd)  { Write-Host "  etcd       : etcd.$Namespace.svc:2379 (root / etcdroot123)" -ForegroundColor Green }
 if ($Nacos) { Write-Host "  Nacos      : nacos.$Namespace.svc:8848 (nacos / nacos)" -ForegroundColor Green }
 if ($RocketMQ) { Write-Host "  RocketMQ NS: rocketmq-namesrv.$Namespace.svc:9876" -ForegroundColor Green }
 if ($Sentinel)  { Write-Host "  Sentinel   : sentinel-dashboard.$Namespace.svc:8080 (sentinel / sentinel123)" -ForegroundColor Green }
 if ($Skywalking){ Write-Host "  SkyWalking : skywalking-oap.$Namespace.svc:11800" -ForegroundColor Green }
+if ($OpenBao) { Write-Host "  OpenBao    : openbao.$Namespace.svc:8200 (waiting for init/unseal)" -ForegroundColor Green }
 if ($Apollo)    { Write-Host "  Apollo     : apollo-apollo-portal.$Namespace.svc:8070 (apollo / admin)" -ForegroundColor Green }
 if ($Tdengine)  { Write-Host "  TDengine   : tdengine.$Namespace.svc:6030 (root / taosdata)" -ForegroundColor Green }
 if ($Shardingsphere) { Write-Host "  ShardingSphere : shardingsphere-proxy.$Namespace.svc:3307 (MySQL sharding)" -ForegroundColor Green }
@@ -238,6 +281,9 @@ if ($Dubbo)   { Write-Host "  Dubbo-Admin: dubbo-admin.$Namespace.svc:8081 (root
 if ($Seata)   { Write-Host "  Seata      : seata-server.$Namespace.svc:8091 (file mode)" -ForegroundColor Green }
 if ($XxlJob)  { Write-Host "  XXL-JOB    : xxl-job-admin.$Namespace.svc:8080 (admin / 123456)" -ForegroundColor Green }
 if ($Prometheus) { Write-Host "  Prometheus : prometheus-operated.$Namespace.svc:9090" -ForegroundColor Green }
+if ($Loki)    { Write-Host "  Loki       : loki-gateway.$Namespace.svc:80 (Alloy 2 replicas)" -ForegroundColor Green }
+if ($Velero)  { Write-Host "  Velero     : controller + node-agent (no schedule created)" -ForegroundColor Green }
+if ($Renovate) { Write-Host "  Renovate   : suspended CronJob (enable after Secret)" -ForegroundColor Green }
 if ($Pulsar)  { Write-Host "  Pulsar     : pulsar-broker.$Namespace.svc:6650" -ForegroundColor Green }
 if ($Flink)   { Write-Host "  Flink      : flink-jobmanager.$Namespace.svc:8081" -ForegroundColor Green }
 if ($Jenkins) { Write-Host "  Jenkins    : jenkins.$Namespace.svc:8080 (admin / admin123)" -ForegroundColor Green }
@@ -246,5 +292,5 @@ if ($MinIO)     { Write-Host "  MinIO      : minio.$Namespace.svc:9000 (minioadm
 if ($Harbor)    { if ($WithIngress) { Write-Host "  Harbor     : http://$IngressDomain (admin / $AdminPassword)" -ForegroundColor Green } else { Write-Host "  Harbor     : http://${nodeIP}:30002 (admin / $AdminPassword)" -ForegroundColor Green } }
 
 Write-Host ""
-kubectl get pods -n $Namespace --ignore-not-found 2>&1
+if (-not $DryRun) { kubectl get pods -n $Namespace --ignore-not-found 2>&1 }
 if ($DryRun) { Write-Host "`n[DRY-RUN] not deployed" -ForegroundColor Cyan }

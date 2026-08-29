@@ -1,0 +1,31 @@
+# Install Renovate safely as a suspended CronJob. Create the documented Secret
+# and explicitly unsuspend it after choosing a Git platform and repositories.
+
+cronjob:
+  schedule: "0 2 * * *"
+  suspend: true
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  jobRestartPolicy: Never
+
+renovate:
+  config: |
+    {
+      "autodiscover": true,
+      "onboarding": true,
+      "requireConfig": "required"
+    }
+
+envFrom:
+  - secretRef:
+      name: renovate-credentials
+      optional: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi

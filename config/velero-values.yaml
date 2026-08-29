@@ -1,0 +1,50 @@
+# Velero stores Kubernetes backups in the local MinIO/S3 service. The official
+# Velero server currently runs as one controller; node-agent runs on every node.
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: velero
+      default: true
+      accessMode: ReadWrite
+      config:
+        region: us-east-1
+        s3ForcePathStyle: "true"
+        s3Url: http://minio:9000
+  volumeSnapshotLocation: []
+  defaultVolumesToFsBackup: true
+
+credentials:
+  useSecret: true
+  secretContents:
+    cloud: |
+      [default]
+      aws_access_key_id=minioadmin
+      aws_secret_access_key=minioadmin
+
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.13.1
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+deployNodeAgent: true
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: velero
+            app.kubernetes.io/instance: velero
+        topologyKey: kubernetes.io/hostname
+
+# Backups are opt-in. Installing the stack does not create or run a schedule.
+schedules: {}

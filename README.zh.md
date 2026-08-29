@@ -34,6 +34,9 @@ bash deploy-registry-stack.sh --mysql --redis --kafka --nacos
 # 一条命令启动最小高可用 APISIX（2 网关 + 3 etcd，需要至少 3 个节点）
 bash deploy-registry-stack.sh --apisix
 
+# 一条命令补齐研发平台工具（etcd/OpenBao/Loki/Velero/Renovate）
+bash deploy-registry-stack.sh --platform-all
+
 # 生产环境：3 台物理机 K3s HA
 NODE_IPS=10.0.0.1,10.0.0.2,10.0.0.3 bash deploy-k8s-cluster.sh k3s
 bash deploy-registry-stack.sh --all
@@ -55,6 +58,9 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 # 一条命令启动最小高可用 APISIX（2 网关 + 3 etcd，需要至少 3 个节点）
 .\deploy-registry-stack.ps1 -Apisix
 
+# 一条命令补齐研发平台工具
+.\deploy-registry-stack.ps1 -PlatformAll
+
 # 先校验
 .\deploy-registry-stack.ps1 -DryRun -WithAll
 ```
@@ -75,7 +81,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 │  PostgreSQL(3)    MySQL(3)    Redis(3)    MinIO              │
 │                                                               │
 │  存储 & 协调 ─────────────────────────────────────────────   │
-│  Elasticsearch(3)  MongoDB(3)  ZooKeeper(3)                  │
+│  Elasticsearch(3)  MongoDB(3)  ZooKeeper(3)  etcd(3)         │
 │                                                               │
 │  消息队列 ────────────────────────────────────────────────   │
 │  Kafka KRaft(3)    RocketMQ(3NS + 3Broker)                   │
@@ -95,7 +101,10 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 │  镜像仓库 ────────────────────────────────────────────────   │
 │  Harbor (Harbor 镜像库)                                      │
 │                                                               │
-│  🛡 所有中间件 ≥ 3 节点 · 自动防脑裂                          │
+│  平台工程 ────────────────────────────────────────────────   │
+│  OpenBao(3)  Loki HA + Alloy(2)  Velero  Renovate CronJob    │
+│                                                               │
+│  🛡 HA 组件使用 PDB / 反亲和；例外见“平台工具说明”             │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -131,9 +140,15 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 24 | 🌊 **Flink** | `--flink` | `-Flink` | 1+2 | Apache | 流计算引擎 |
 | 25 | 🏗️ **Jenkins** | `--jenkins` | `-Jenkins` | 1 | Jenkins | CI/CD 持续集成 |
 | 26 | 🟢 **Spring Boot Admin** | `--spring-boot-admin` | `-Sba` | 2 | codecentric | Spring Boot 应用监控 |
-| 28 | 🎯 **全部** | `--all` | `-WithAll` | - | - | 一键全量部署 |
+| 27 | 🧱 **独立 etcd** | `--etcd` | `-Etcd` | 3 | Bitnami/etcd | 独立协调与键值存储，不与 APISIX 共用 |
+| 28 | 🔐 **OpenBao** | `--openbao` | `-OpenBao` | 3 | OpenBao | Raft 密钥管理，需手动 init/unseal |
+| 29 | 🪵 **Loki + Alloy** | `--loki` | `-Loki` | 3+3+3+2+2 | Grafana | HA 日志存储与集群化采集（依赖 MinIO/S3） |
+| 30 | 💾 **Velero** | `--velero` | `-Velero` | 1+DaemonSet | Velero | K8s 备份控制器与节点代理（依赖 MinIO/S3） |
+| 31 | 🤖 **Renovate** | `--renovate` | `-Renovate` | CronJob | Renovate | 依赖自动更新，默认暂停 |
+| 32 | 🧰 **平台工具** | `--platform-all` | `-PlatformAll` | - | - | 部署第 27～31 项；不改变 `--all` |
+| 33 | 🎯 **全部** | `--all` | `-WithAll` | - | - | 部署原有中间件集合 |
 
-> 💡 MySQL、PostgreSQL、Redis、MinIO 使用**官方镜像**，无 Bitnami 拉取限制，国内用户友好。
+> 💡 `--loki` 和 `--velero` 会自动部署 MinIO 依赖；`--platform-all` 只包含新增的平台工具，不会扩大原有 `--all` 的范围。
 
 ---
 
@@ -182,10 +197,17 @@ beggar/
     ├── nacos-values.yaml             # Nacos 配置（依赖 MySQL）
     ├── mongodb-values.yaml           # MongoDB 配置
     ├── zookeeper-values.yaml         # ZooKeeper 配置
+    ├── etcd-values.yaml              # 独立 etcd 3 节点配置
+    ├── minio-values.yaml             # MinIO 及共享桶配置
     ├── skywalking-values.yaml        # SkyWalking 配置（依赖 ES）
     ├── apollo-values.yaml            # Apollo 配置（依赖 MySQL）
     ├── tdengine-values.yaml          # TDengine 配置
     ├── apisix-values.yaml            # APISIX 网关配置
+    ├── openbao-values.yaml           # OpenBao 3 节点 Raft 配置
+    ├── loki-values.yaml              # Loki SimpleScalable HA 配置
+    ├── alloy-values.yaml             # Alloy 双副本集群采集配置
+    ├── velero-values.yaml            # Velero + MinIO/S3 配置
+    ├── renovate-values.yaml          # Renovate 暂停 CronJob 配置
     ├── shenyu-values.yaml            # ShenYu 网关配置
     ├── prometheus-values.yaml        # Prometheus+Grafana 配置
     ├── pulsar-values.yaml            # Pulsar 消息队列配置
@@ -195,6 +217,55 @@ beggar/
 ## 🛣️ APISIX 使用说明
 
 APISIX HA 与其他 Helm 中间件一样，通过 Rancher Desktop 提供的 `helm` / `kubectl` 部署；一条 `-Apisix` 命令会启动 2 个 APISIX 和 3 个 etcd。HTTP 入口为 `http://<NodeIP>:30011`；Admin API 保持 ClusterIP，仅供集群内使用。硬反亲和规则会将网关和 etcd 副本分别分散到不同节点，因此集群少于 3 个可调度节点时不会部署成功。该配置不启用 Ingress Controller；路由通过 Admin API 配置。`--all` 会同时安装 APISIX HA 和 ShenYu，但同一个外部域名/入口应只交由其中一个网关处理。
+
+## 🧰 平台工具说明
+
+以下命令一次安装五项平台工具；Loki 和 Velero 会自动带上同命名空间的 MinIO：
+
+```bash
+bash deploy-registry-stack.sh --platform-all
+# Windows: .\deploy-registry-stack.ps1 -PlatformAll
+```
+
+独立 etcd 使用 3 个副本、硬反亲和和 `minAvailable: 2` 的 PDB，地址是 `etcd.registry-stack.svc:2379`。它不会替代 APISIX 自带的 etcd。仓库内密码仅用于本地/演示环境，共享环境必须先修改 `config/etcd-values.yaml`。
+
+OpenBao 部署后会保持未初始化、密封状态，这是预期的安全行为。保存好下面第一条命令输出的恢复密钥和 root token，再初始化一个节点、让另外两个节点加入 Raft 并分别解封：
+
+```bash
+kubectl exec -n registry-stack openbao-0 -- bao operator init -key-shares=3 -key-threshold=2
+kubectl exec -n registry-stack openbao-0 -- bao operator unseal '<KEY_1>'
+kubectl exec -n registry-stack openbao-0 -- bao operator unseal '<KEY_2>'
+
+kubectl exec -n registry-stack openbao-1 -- bao operator raft join http://openbao-0.openbao-internal:8200
+kubectl exec -n registry-stack openbao-1 -- bao operator unseal '<KEY_1>'
+kubectl exec -n registry-stack openbao-1 -- bao operator unseal '<KEY_2>'
+kubectl exec -n registry-stack openbao-2 -- bao operator raft join http://openbao-0.openbao-internal:8200
+kubectl exec -n registry-stack openbao-2 -- bao operator unseal '<KEY_1>'
+kubectl exec -n registry-stack openbao-2 -- bao operator unseal '<KEY_2>'
+kubectl exec -n registry-stack openbao-0 -- bao operator raft list-peers
+```
+
+Loki 使用 SimpleScalable：write/read/backend 各 3 副本，gateway 和 Alloy 各 2 副本；Alloy clustering 会分片 Pod 日志目标，避免双份采集。默认 MinIO 仍是单副本开发配置，因此这里保证的是 Loki 计算面 HA，不是端到端存储 HA；生产环境应把 `config/loki-values.yaml` 与 `config/velero-values.yaml` 指向外部高可用 S3。
+
+Velero 安装不会自动执行备份或恢复。确认外部对象存储后，可用 Velero CLI 手工创建并验证计划：
+
+```bash
+velero schedule create registry-stack-daily --schedule "0 3 * * *" --include-namespaces registry-stack
+velero backup get
+# 恢复属于破坏性操作，核对备份名和目标集群后再执行：
+velero restore create --from-backup '<BACKUP_NAME>'
+```
+
+Velero 官方服务端当前固定为单控制器且没有 leader election；本配置没有强行扩容来伪造 HA。Deployment 可在节点故障后重建，node-agent 则覆盖每个节点，但控制器切换期间会有短暂中断。
+
+Renovate 默认是暂停的 CronJob，不会在没有令牌时访问仓库。为 GitHub 创建凭据并显式启用：
+
+```bash
+kubectl create secret generic renovate-credentials -n registry-stack \
+  --from-literal=RENOVATE_PLATFORM=github \
+  --from-literal=RENOVATE_TOKEN='<TOKEN>'
+kubectl patch cronjob renovate -n registry-stack --type merge -p '{"spec":{"suspend":false}}'
+```
 
 ---
 
