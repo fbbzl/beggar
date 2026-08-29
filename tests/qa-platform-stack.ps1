@@ -55,9 +55,9 @@ lacks_release() { ! grep -q "helm upgrade --install $2 " <<<"$1"; }
 release_count() { grep -c "\[DRY-RUN\] helm upgrade --install " <<<"$1"; }
 
 platform=$(DRY_RUN=1 ./deploy-registry-stack.sh --platform-all)
-for release in minio etcd openbao loki alloy velero renovate; do has_release "$platform" "$release"; done
+for release in cert-manager minio etcd openbao argocd kyverno loki alloy velero renovate; do has_release "$platform" "$release"; done
 for release in mysql apisix shenyu; do lacks_release "$platform" "$release"; done
-[ "$(release_count "$platform")" -eq 7 ]
+[ "$(release_count "$platform")" -eq 10 ]
 
 etcd=$(DRY_RUN=1 ./deploy-registry-stack.sh --etcd)
 has_release "$etcd" etcd
@@ -84,22 +84,50 @@ has_release "$all" apisix
 for release in etcd openbao loki alloy velero renovate; do lacks_release "$all" "$release"; done
 
 help=$(./deploy-registry-stack.sh --help)
-for flag in --etcd --openbao --loki --velero --renovate --platform-all; do grep -q -- "$flag" <<<"$help"; done
+for flag in --cert-manager --argocd --kyverno --etcd --openbao --loki --velero --renovate --platform-all; do grep -q -- "$flag" <<<"$help"; done
 '@
 
     & $bashExe -n "deploy-registry-stack.sh"
     Assert-True ($LASTEXITCODE -eq 0) "Bash syntax check failed"
+    & $bashExe -n "deploy-k8s-cluster.sh"
+    Assert-True ($LASTEXITCODE -eq 0) "Bash cluster syntax check failed"
     & $bashExe -lc $test
     Assert-True ($LASTEXITCODE -eq 0) "Bash dry-run routing failed"
+
+    $clusterTest = @'
+set -euo pipefail
+kubectl() { :; }
+helm() { :; }
+docker() { :; }
+export -f kubectl helm docker
+
+help=$(DRY_RUN=1 SKIP_REGISTRY=1 ./deploy-k8s-cluster.sh)
+grep -q "bash ./deploy-k8s-cluster.sh k3d" <<<"$help"
+grep -q "DRY_RUN=1" <<<"$help"
+
+k3d=$(DRY_RUN=1 SKIP_REGISTRY=1 ./deploy-k8s-cluster.sh k3d)
+grep -q "\[DRY-RUN\] curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash" <<<"$k3d"
+grep -q "\[DRY-RUN\] k3d cluster create beggar-cluster" <<<"$k3d"
+
+if DRY_RUN=1 SKIP_REGISTRY=1 ./deploy-k8s-cluster.sh k3s >/tmp/beggar-k3s-missing.out 2>&1; then
+  exit 98
+fi
+grep -q "请设置 NODE_IPS" /tmp/beggar-k3s-missing.out
+'@
+    & $bashExe -lc $clusterTest
+    Assert-True ($LASTEXITCODE -eq 0) "Bash cluster black-box checks failed"
 }
 
 function Invoke-PowerShellRoutingTests {
     $deploy = Join-Path $RepoRoot "deploy-registry-stack.ps1"
+    $clusterDeploy = Join-Path $RepoRoot "deploy-k8s-cluster.ps1"
     $pwsh = (Get-Process -Id $PID).Path
     $tokens = $null
     $parseErrors = $null
     [void][System.Management.Automation.Language.Parser]::ParseFile($deploy, [ref]$tokens, [ref]$parseErrors)
     Assert-True ($parseErrors.Count -eq 0) "PowerShell syntax check failed"
+    [void][System.Management.Automation.Language.Parser]::ParseFile($clusterDeploy, [ref]$tokens, [ref]$parseErrors)
+    Assert-True ($parseErrors.Count -eq 0) "PowerShell cluster syntax check failed"
 
     & {
         function Invoke-DryRun([string]$SwitchName) {
@@ -114,10 +142,10 @@ function kubectl { throw 'kubectl was called during dry-run' }
         }
 
         $platform = Invoke-DryRun "PlatformAll"
-        @("minio", "etcd", "openbao", "loki", "alloy", "velero", "renovate") |
+        @("cert-manager", "minio", "etcd", "openbao", "argocd", "kyverno", "loki", "alloy", "velero", "renovate") |
             ForEach-Object { Assert-HasRelease $platform $_ }
         @("mysql", "apisix", "shenyu") | ForEach-Object { Assert-LacksRelease $platform $_ }
-        Assert-True ((Get-ReleaseCount $platform) -eq 7) "-PlatformAll expanded to an unexpected release set"
+        Assert-True ((Get-ReleaseCount $platform) -eq 10) "-PlatformAll expanded to an unexpected release set"
 
         $etcd = Invoke-DryRun "Etcd"
         Assert-HasRelease $etcd "etcd"
@@ -139,16 +167,50 @@ function kubectl { throw 'kubectl was called during dry-run' }
         Assert-HasRelease $renovate "renovate"
         Assert-True ((Get-ReleaseCount $renovate) -eq 1) "-Renovate should deploy exactly one release"
 
+        $certManager = Invoke-DryRun "CertManager"
+        Assert-HasRelease $certManager "cert-manager"
+        Assert-True ((Get-ReleaseCount $certManager) -eq 1) "-CertManager should deploy exactly one release"
+
+        $argocd = Invoke-DryRun "ArgoCD"
+        Assert-HasRelease $argocd "argocd"
+        Assert-True ((Get-ReleaseCount $argocd) -eq 1) "-ArgoCD should deploy exactly one release"
+
+        $kyverno = Invoke-DryRun "Kyverno"
+        Assert-HasRelease $kyverno "kyverno"
+        Assert-True ((Get-ReleaseCount $kyverno) -eq 1) "-Kyverno should deploy exactly one release"
+
         $all = Invoke-DryRun "WithAll"
         Assert-HasRelease $all "apisix"
         @("etcd", "openbao", "loki", "alloy", "velero", "renovate") |
             ForEach-Object { Assert-LacksRelease $all $_ }
     }
+
+    $clusterCommand = @"
+function kubectl { `$global:LASTEXITCODE = 0 }
+function helm { `$global:LASTEXITCODE = 0 }
+function docker { `$global:LASTEXITCODE = 0 }
+& '$clusterDeploy' -DryRun -SkipRegistryStack
+& '$clusterDeploy' -DryRun -SkipRegistryStack -WithK3d
+"@
+    $clusterOutput = & $pwsh -NoProfile -NonInteractive -Command $clusterCommand 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "PowerShell cluster black-box checks failed: $($clusterOutput -join [Environment]::NewLine)"
+    }
+    $clusterText = $clusterOutput -join [Environment]::NewLine
+    Assert-Contains $clusterText "工具链检查 (已有集群模式)" "PowerShell cluster default mode did not run"
+    Assert-Contains $clusterText "[DRY-RUN] curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash" "PowerShell k3d install dry-run is missing"
+    Assert-Contains $clusterText "[DRY-RUN] k3d cluster create beggar-cluster" "PowerShell k3d create dry-run is missing"
 }
 
 function Add-IsolatedHelmRepository([string]$Name, [string]$Url) {
-    & helm repo add $Name $Url --force-update 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Unable to add Helm repository '$Name'" }
+    $repos = & helm repo list 2>$null
+    if ($LASTEXITCODE -eq 0 -and ($repos -match "(?m)^$Name\s+")) { return }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        & helm repo add $Name $Url --force-update 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { return }
+        Start-Sleep -Seconds $attempt
+    }
+    throw "Unable to add Helm repository '$Name'"
 }
 
 function Invoke-HelmTemplate([string]$Release, [string]$Chart, [string]$ValuesFile) {
@@ -187,20 +249,21 @@ function Invoke-HelmRenderingTests {
     $helm = Get-Command helm -ErrorAction Stop
     Assert-True ([bool]$helm) "Helm is unavailable"
 
-    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-    $qaCache = Join-Path $tempRoot ("beggar-qa-helm-" + [guid]::NewGuid().ToString("N"))
-    [void](New-Item -ItemType Directory -Path $qaCache)
-    $env:HELM_REPOSITORY_CONFIG = Join-Path $qaCache "repositories.yaml"
-    $env:HELM_REPOSITORY_CACHE = Join-Path $qaCache "repository"
-
     Add-IsolatedHelmRepository "openbao" "https://openbao.github.io/openbao-helm"
+    Add-IsolatedHelmRepository "bitnami" "https://charts.bitnami.com/bitnami"
+    Add-IsolatedHelmRepository "jetstack" "https://charts.jetstack.io"
+    Add-IsolatedHelmRepository "argo" "https://argoproj.github.io/argo-helm"
+    Add-IsolatedHelmRepository "kyverno" "https://kyverno.github.io/kyverno"
     Add-IsolatedHelmRepository "grafana-community" "https://grafana-community.github.io/helm-charts"
     Add-IsolatedHelmRepository "grafana" "https://grafana.github.io/helm-charts"
     Add-IsolatedHelmRepository "vmware-tanzu" "https://vmware-tanzu.github.io/helm-charts"
 
     $config = Join-Path $RepoRoot "config"
-    $etcd = Invoke-HelmTemplate "etcd" "oci://registry-1.docker.io/bitnamicharts/etcd" (Join-Path $config "etcd-values.yaml")
-    $minio = Invoke-HelmTemplate "minio" "oci://registry-1.docker.io/bitnamicharts/minio" (Join-Path $config "minio-values.yaml")
+    $etcd = Invoke-HelmTemplate "etcd" "bitnami/etcd" (Join-Path $config "etcd-values.yaml")
+    $certManager = Invoke-HelmTemplate "certmgr" "jetstack/cert-manager" (Join-Path $config "cert-manager-values.yaml")
+    $argocd = Invoke-HelmTemplate "argocd" "argo/argo-cd" (Join-Path $config "argocd-values.yaml")
+    $kyverno = Invoke-HelmTemplate "kyverno" "kyverno/kyverno" (Join-Path $config "kyverno-values.yaml")
+    $minio = Invoke-HelmTemplate "minio" "bitnami/minio" (Join-Path $config "minio-values.yaml")
     $openbao = Invoke-HelmTemplate "openbao" "openbao/openbao" (Join-Path $config "openbao-values.yaml")
     $loki = Invoke-HelmTemplate "loki" "grafana-community/loki" (Join-Path $config "loki-values.yaml")
     $alloy = Invoke-HelmTemplate "alloy" "grafana/alloy" (Join-Path $config "alloy-values.yaml")
@@ -214,6 +277,22 @@ function Invoke-HelmRenderingTests {
     Assert-Contains $minio "loki-ruler" "MinIO does not provision the Loki ruler bucket"
     Assert-Contains $minio "loki-admin" "MinIO does not provision the Loki admin bucket"
     Assert-Contains $minio "velero" "MinIO does not provision the Velero bucket"
+
+    Assert-Workload $certManager "Deployment" "certmgr-cert-manager" 2 $true
+    Assert-Workload $certManager "Deployment" "certmgr-cert-manager-webhook" 3 $true
+    Assert-Workload $certManager "Deployment" "certmgr-cert-manager-cainjector" 2 $true
+    Assert-Contains $certManager "minAvailable: 1" "cert-manager PDBs are missing or incorrect"
+
+    Assert-Contains $argocd 'server.insecure: "false"' "Argo CD should render TLS-enabled server settings"
+    Assert-Contains $argocd "nodePort: 30012" "Argo CD HTTP NodePort is incorrect"
+    Assert-Contains $argocd "nodePort: 30013" "Argo CD HTTPS NodePort is incorrect"
+    Assert-Contains $argocd "ARGOCD_ENABLE_DYNAMIC_CLUSTER_DISTRIBUTION" "Argo CD controller distribution flag is missing"
+
+    Assert-Workload $kyverno "Deployment" "kyverno-admission-controller" 3 $true
+    Assert-Workload $kyverno "Deployment" "kyverno-background-controller" 2 $true
+    Assert-Workload $kyverno "Deployment" "kyverno-cleanup-controller" 2 $true
+    Assert-Workload $kyverno "Deployment" "kyverno-reports-controller" 2 $true
+    Assert-Contains $kyverno "minAvailable: 2" "Kyverno admission controller PDB is incorrect"
 
     Assert-Workload $openbao "StatefulSet" "openbao" 3 $true
     Assert-Contains (Get-ManifestDocument $openbao "PodDisruptionBudget" "openbao") "maxUnavailable: 1" "OpenBao PDB is incorrect"

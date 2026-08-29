@@ -5,7 +5,7 @@ admissionController:
   replicas: 3
   # Replace the chart's preferred rule with a hard host-level rule.
   antiAffinity:
-    enabled: false
+    enabled: true
   podAntiAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       - labelSelector:
@@ -22,7 +22,7 @@ backgroundController:
   enabled: true
   replicas: 2
   antiAffinity:
-    enabled: false
+    enabled: true
   podAntiAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       - labelSelector:
@@ -37,7 +37,7 @@ cleanupController:
   enabled: true
   replicas: 2
   antiAffinity:
-    enabled: false
+    enabled: true
   podAntiAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       - labelSelector:
@@ -54,7 +54,7 @@ reportsController:
   enabled: true
   replicas: 2
   antiAffinity:
-    enabled: false
+    enabled: true
   podAntiAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       - labelSelector:
