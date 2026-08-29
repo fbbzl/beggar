@@ -34,6 +34,9 @@
     [switch]$Loki,
     [switch]$Velero,
     [switch]$Renovate,
+    [switch]$CertManager,
+    [switch]$ArgoCD,
+    [switch]$Kyverno,
     [switch]$PlatformAll,
     [Alias("WithAll")]
     [switch]$All,
@@ -57,7 +60,7 @@ if ($All) {
 
 # Platform shortcut; intentionally does not change the existing -All scope.
 if ($PlatformAll) {
-    $Etcd = $OpenBao = $Loki = $Velero = $Renovate = $true
+    $CertManager = $ArgoCD = $Kyverno = $Etcd = $OpenBao = $Loki = $Velero = $Renovate = $true
 }
 
 # dependency auto-resolve
@@ -72,7 +75,7 @@ if ($Velero) { $MinIO = $true }
 $any = $Pg -or $Mysql -or $Redis -or $MinIO -or $Kafka -or $Es -or $Mongo -or $Zk `
      -or $Nacos -or $RocketMQ -or $Sentinel -or $Skywalking -or $Apollo -or $Tdengine -or $Harbor -or $Shardingsphere `
      -or $Apisix -or $Shenyu -or $Dubbo -or $Seata -or $XxlJob -or $Prometheus -or $Pulsar -or $Flink -or $Jenkins -or $Sba `
-     -or $Etcd -or $OpenBao -or $Loki -or $Velero -or $Renovate
+     -or $CertManager -or $ArgoCD -or $Kyverno -or $Etcd -or $OpenBao -or $Loki -or $Velero -or $Renovate
 
 if (-not $any) {
     Write-Host @"
@@ -110,7 +113,10 @@ Options:
   -Loki               Loki HA + Alloy clustered log collection (+MinIO)
   -Velero             Velero backup controller + node agents (+MinIO)
   -Renovate           Renovate suspended CronJob
-  -PlatformAll        Deploy etcd/OpenBao/Loki/Velero/Renovate
+  -CertManager        cert-manager control plane
+  -ArgoCD             Argo CD GitOps control plane
+  -Kyverno            Kyverno policy control plane
+  -PlatformAll        Deploy cert-manager/Argo CD/Kyverno + etcd/OpenBao/Loki/Velero/Renovate
   -All                Deploy everything
   -WithIngress        Enable Ingress (default NodePort)
   -DryRun             Validate only
@@ -164,13 +170,16 @@ step "Helm Repos"
 helm repo add bitnami https://charts.bitnami.com/bitnami 2>$null | Out-Null
 helm repo add elastic https://helm.elastic.co 2>$null | Out-Null
 helm repo add harbor https://helm.goharbor.io 2>$null | Out-Null
+helm repo add jetstack https://charts.jetstack.io 2>$null | Out-Null
 helm repo add nacos-group https://nacos-group.github.io/nacos-helm 2>$null | Out-Null
 helm repo add apache https://apache.jfrog.io/artifactory/skywalking-helm 2>$null | Out-Null
 helm repo add apolloconfig https://apolloconfig.github.io/apollo-helm 2>$null | Out-Null
 helm repo add tdengine https://tdengine.github.io/helm-charts 2>$null | Out-Null
+helm repo add argo https://argoproj.github.io/argo-helm 2>$null | Out-Null
 helm repo add shenyu https://apache.github.io/shenyu-helm-chart 2>$null | Out-Null
 helm repo add apisix https://apache.github.io/apisix-helm-chart 2>$null | Out-Null
 helm repo add openbao https://openbao.github.io/openbao-helm 2>$null | Out-Null
+helm repo add kyverno https://kyverno.github.io/kyverno 2>$null | Out-Null
 helm repo add grafana-community https://grafana-community.github.io/helm-charts 2>$null | Out-Null
 helm repo add grafana https://grafana.github.io/helm-charts 2>$null | Out-Null
 helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts 2>$null | Out-Null
@@ -188,6 +197,7 @@ if ($DryRun) {
 }
 
 # deploy components
+if ($CertManager) { step "--- cert-manager ---"; hlm "cert-manager" "jetstack/cert-manager" "$CFG/cert-manager-values.yaml" $null }
 if ($Mysql) { step "--- MySQL ---"; hlm "mysql" "bitnami/mysql" "$CFG/mysql-values.yaml" $null }
 if ($Pg)    { step "--- PostgreSQL ---"; hlm "pg" "bitnami/postgresql-ha" "$CFG/postgresql-values.yaml" $null }
 if ($Redis) { step "--- Redis ---"; hlm "redis" "bitnami/redis" "$CFG/redis-values.yaml" $null }
@@ -210,6 +220,8 @@ if ($Apollo) { step "--- Apollo ---"
 if ($Sentinel)   { step "--- Sentinel ---"; kubeApply "$CFG/manifests/sentinel-dashboard.yaml" }
 if ($Skywalking) { step "--- SkyWalking ---"; hlm "skywalking" "apache/skywalking-helm" "$CFG/skywalking-values.yaml" $null }
 if ($OpenBao) { step "--- OpenBao ---"; hlm "openbao" "openbao/openbao" "$CFG/openbao-values.yaml" @("--timeout", "15m") }
+if ($ArgoCD) { step "--- Argo CD ---"; hlm "argocd" "argo/argo-cd" "$CFG/argocd-values.yaml" $null }
+if ($Kyverno) { step "--- Kyverno ---"; hlm "kyverno" "kyverno/kyverno" "$CFG/kyverno-values.yaml" $null }
 if ($Tdengine)   { step "--- TDengine ---"; hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml" $null }
 if ($Shardingsphere) { step "--- ShardingSphere ---"; kubeApply "$CFG/manifests/shardingsphere.yaml" }
 
@@ -272,6 +284,9 @@ if ($RocketMQ) { Write-Host "  RocketMQ NS: rocketmq-namesrv.$Namespace.svc:9876
 if ($Sentinel)  { Write-Host "  Sentinel   : sentinel-dashboard.$Namespace.svc:8080 (sentinel / sentinel123)" -ForegroundColor Green }
 if ($Skywalking){ Write-Host "  SkyWalking : skywalking-oap.$Namespace.svc:11800" -ForegroundColor Green }
 if ($OpenBao) { Write-Host "  OpenBao    : openbao.$Namespace.svc:8200 (waiting for init/unseal)" -ForegroundColor Green }
+if ($CertManager) { Write-Host "  cert-manager: controllers + CRDs (no Issuer/Certificate created)" -ForegroundColor Green }
+if ($ArgoCD) { Write-Host "  Argo CD    : https://${nodeIP}:30013 (admin / initial password secret)" -ForegroundColor Green }
+if ($Kyverno) { Write-Host "  Kyverno    : admission/background/cleanup/reports controllers" -ForegroundColor Green }
 if ($Apollo)    { Write-Host "  Apollo     : apollo-apollo-portal.$Namespace.svc:8070 (apollo / admin)" -ForegroundColor Green }
 if ($Tdengine)  { Write-Host "  TDengine   : tdengine.$Namespace.svc:6030 (root / taosdata)" -ForegroundColor Green }
 if ($Shardingsphere) { Write-Host "  ShardingSphere : shardingsphere-proxy.$Namespace.svc:3307 (MySQL sharding)" -ForegroundColor Green }

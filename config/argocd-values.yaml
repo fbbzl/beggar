@@ -1,0 +1,89 @@
+# Minimum highly available Argo CD GitOps control plane. Jenkins remains the CI
+# system and Renovate remains the dependency updater; this release only handles
+# declarative continuous delivery and creates no Application resources.
+
+crds:
+  install: true
+  keep: true
+
+configs:
+  params:
+    # Keep TLS enabled for the HTTPS NodePort. Add a cert-manager-backed Ingress
+    # before exposing Argo CD outside a trusted network.
+    server.insecure: false
+
+dex:
+  enabled: false
+
+notifications:
+  enabled: false
+
+redis:
+  enabled: false
+
+redis-ha:
+  enabled: true
+  hardAntiAffinity: true
+  haproxy:
+    enabled: true
+    replicas: 3
+    hardAntiAffinity: true
+
+controller:
+  replicas: 2
+  # Required for failed controller shards to be reassigned. Argo CD currently
+  # marks this capability alpha; see the README risk note.
+  dynamicClusterDistribution: true
+  pdb:
+    enabled: true
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: argocd-application-controller
+          topologyKey: kubernetes.io/hostname
+
+server:
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: argocd-server
+          topologyKey: kubernetes.io/hostname
+  service:
+    type: NodePort
+    nodePortHttp: 30012
+    nodePortHttps: 30013
+
+repoServer:
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: argocd-repo-server
+          topologyKey: kubernetes.io/hostname
+
+applicationSet:
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: argocd-applicationset-controller
+          topologyKey: kubernetes.io/hostname

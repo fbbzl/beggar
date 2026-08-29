@@ -34,7 +34,7 @@ bash deploy-registry-stack.sh --mysql --redis --kafka --nacos
 # 一条命令启动最小高可用 APISIX（2 网关 + 3 etcd，需要至少 3 个节点）
 bash deploy-registry-stack.sh --apisix
 
-# 一条命令补齐研发平台工具（etcd/OpenBao/Loki/Velero/Renovate）
+# 一条命令补齐研发平台工具（cert-manager/Argo CD/Kyverno/etcd/OpenBao/Loki/Velero/Renovate）
 bash deploy-registry-stack.sh --platform-all
 
 # 生产环境：3 台物理机 K3s HA
@@ -102,7 +102,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 │  Harbor (Harbor 镜像库)                                      │
 │                                                               │
 │  平台工程 ────────────────────────────────────────────────   │
-│  OpenBao(3)  Loki HA + Alloy(2)  Velero  Renovate CronJob    │
+│  cert-manager  Argo CD  Kyverno  OpenBao(3)  Loki+Alloy      │
 │                                                               │
 │  🛡 HA 组件使用 PDB / 反亲和；例外见“平台工具说明”             │
 └──────────────────────────────────────────────────────────────┘
@@ -140,15 +140,18 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 24 | 🌊 **Flink** | `--flink` | `-Flink` | 1+2 | Apache | 流计算引擎 |
 | 25 | 🏗️ **Jenkins** | `--jenkins` | `-Jenkins` | 1 | Jenkins | CI/CD 持续集成 |
 | 26 | 🟢 **Spring Boot Admin** | `--spring-boot-admin` | `-Sba` | 2 | codecentric | Spring Boot 应用监控 |
-| 27 | 🧱 **独立 etcd** | `--etcd` | `-Etcd` | 3 | Bitnami/etcd | 独立协调与键值存储，不与 APISIX 共用 |
-| 28 | 🔐 **OpenBao** | `--openbao` | `-OpenBao` | 3 | OpenBao | Raft 密钥管理，需手动 init/unseal |
-| 29 | 🪵 **Loki + Alloy** | `--loki` | `-Loki` | 3+3+3+2+2 | Grafana | HA 日志存储与集群化采集（依赖 MinIO/S3） |
-| 30 | 💾 **Velero** | `--velero` | `-Velero` | 1+DaemonSet | Velero | K8s 备份控制器与节点代理（依赖 MinIO/S3） |
-| 31 | 🤖 **Renovate** | `--renovate` | `-Renovate` | CronJob | Renovate | 依赖自动更新，默认暂停 |
-| 32 | 🧰 **平台工具** | `--platform-all` | `-PlatformAll` | - | - | 部署第 27～31 项；不改变 `--all` |
-| 33 | 🎯 **全部** | `--all` | `-WithAll` | - | - | 部署原有中间件集合 |
+| 27 | 🪪 **cert-manager** | `--cert-manager` | `-CertManager` | 2+3+2 | Jetstack | 证书生命周期控制器与 CRD；默认不创建 Issuer |
+| 28 | 🚢 **Argo CD** | `--argocd` | `-ArgoCD` | 2+2+2+HA Redis | Argo Project | GitOps 持续交付控制平面 |
+| 29 | 🛡️ **Kyverno** | `--kyverno` | `-Kyverno` | 3+2+2+2 | Kyverno | 策略准入与报告控制平面；默认不安装策略 |
+| 30 | 🧱 **独立 etcd** | `--etcd` | `-Etcd` | 3 | Bitnami/etcd | 独立协调与键值存储，不与 APISIX 共用 |
+| 31 | 🔐 **OpenBao** | `--openbao` | `-OpenBao` | 3 | OpenBao | Raft 密钥管理，需手动 init/unseal |
+| 32 | 🪵 **Loki + Alloy** | `--loki` | `-Loki` | 3+3+3+2+2 | Grafana | HA 日志存储与集群化采集（依赖 MinIO/S3） |
+| 33 | 💾 **Velero** | `--velero` | `-Velero` | 1+DaemonSet | Velero | K8s 备份控制器与节点代理（依赖 MinIO/S3） |
+| 34 | 🤖 **Renovate** | `--renovate` | `-Renovate` | CronJob | Renovate | 依赖自动更新，默认暂停 |
+| 35 | 🧰 **平台工具** | `--platform-all` | `-PlatformAll` | - | - | 部署第 27～34 项；不改变 `--all` |
+| 36 | 🎯 **全部** | `--all` | `-WithAll` | - | - | 部署原有中间件集合 |
 
-> 💡 `--loki` 和 `--velero` 会自动部署 MinIO 依赖；`--platform-all` 只包含新增的平台工具，不会扩大原有 `--all` 的范围。
+> 💡 `--loki` 和 `--velero` 会自动部署 MinIO 依赖；`--platform-all` 只包含平台工具，不会扩大原有 `--all` 的范围。
 
 ---
 
@@ -164,6 +167,8 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | `30009` | Sentinel API | 监控数据 API |
 | `30010` | RocketMQ NameServer | 消息队列客户端接入 |
 | `30011` | APISIX HTTP | API 网关入口 |
+| `30012` | Argo CD HTTP service port | 转发到 Argo CD server |
+| `30013` | Argo CD HTTPS | GitOps UI/API TLS 入口 |
 | `30307` | ShardingSphere-Proxy | 多主分库 MySQL 协议入口 |
 
 ---
@@ -203,6 +208,9 @@ beggar/
     ├── apollo-values.yaml            # Apollo 配置（依赖 MySQL）
     ├── tdengine-values.yaml          # TDengine 配置
     ├── apisix-values.yaml            # APISIX 网关配置
+    ├── cert-manager-values.yaml      # cert-manager HA 控制平面
+    ├── argocd-values.yaml            # Argo CD GitOps 控制平面
+    ├── kyverno-values.yaml           # Kyverno 策略控制平面
     ├── openbao-values.yaml           # OpenBao 3 节点 Raft 配置
     ├── loki-values.yaml              # Loki SimpleScalable HA 配置
     ├── alloy-values.yaml             # Alloy 双副本集群采集配置
@@ -220,7 +228,7 @@ APISIX HA 与其他 Helm 中间件一样，通过 Rancher Desktop 提供的 `hel
 
 ## 🧰 平台工具说明
 
-以下命令一次安装五项平台工具；Loki 和 Velero 会自动带上同命名空间的 MinIO：
+以下命令一次安装平台工具集合；Loki 和 Velero 会自动带上同命名空间的 MinIO：
 
 ```bash
 bash deploy-registry-stack.sh --platform-all
@@ -228,6 +236,12 @@ bash deploy-registry-stack.sh --platform-all
 ```
 
 独立 etcd 使用 3 个副本、硬反亲和和 `minAvailable: 2` 的 PDB，地址是 `etcd.registry-stack.svc:2379`。它不会替代 APISIX 自带的 etcd。仓库内密码仅用于本地/演示环境，共享环境必须先修改 `config/etcd-values.yaml`。
+
+cert-manager 只安装控制器和 CRD。不同环境所需的 `Issuer`、`ClusterIssuer` 和 `Certificate` 资源需要单独创建。
+
+Argo CD 通过 `https://<NodeIP>:30013` 暴露 NodePort。初始 admin 密码仍在 chart 创建的 Secret 中，离开受信网络前必须轮换。
+
+Kyverno 只安装 admission、background、cleanup 和 reports 控制器。默认不安装策略包，只有添加策略后才开始执行约束。
 
 OpenBao 部署后会保持未初始化、密封状态，这是预期的安全行为。保存好下面第一条命令输出的恢复密钥和 root token，再初始化一个节点、让另外两个节点加入 Raft 并分别解封：
 

@@ -33,6 +33,7 @@ CFG="$SCRIPT_DIR/config"
 PG=; MYSQL=; REDIS=; MINIO=; KAFKA=; ES=; MONGO=; ZK=;
 NACOS=; ROCKETMQ=; SENTINEL=; SKYWALKING=; APOLLO=; TDENGINE=; HARBOR=; SHARDINGSPHERE=
 APISIX=; SHENYU=; DUBBO=; SEATA=; XXL_JOB=; PROMETHEUS=; PULSAR=; FLINK=; JENKINS=; SBA=
+CERT_MANAGER=; ARGOCD=; KYVERNO=
 ETCD=; OPENBAO=; LOKI=; VELERO=; RENOVATE=; PLATFORM_ALL=; ALL=
 
 # ── 参数解析 ──
@@ -70,6 +71,9 @@ while [ $# -gt 0 ]; do
     --loki)             LOKI=1 ;;
     --velero)           VELERO=1 ;;
     --renovate)         RENOVATE=1 ;;
+    --cert-manager)     CERT_MANAGER=1 ;;
+    --argocd)           ARGOCD=1 ;;
+    --kyverno)          KYVERNO=1 ;;
     --platform-all)     PLATFORM_ALL=1 ;;
     --all)              ALL=1 ;;
     --ingress)          WITH_INGRESS=1 ;;
@@ -109,7 +113,10 @@ while [ $# -gt 0 ]; do
       echo "  --loki              Loki HA + Alloy clustered log collection (+MinIO)"
       echo "  --velero            Velero backup controller + node agents (+MinIO)"
       echo "  --renovate          Renovate suspended CronJob"
-      echo "  --platform-all      Deploy etcd/OpenBao/Loki/Velero/Renovate"
+      echo "  --cert-manager      cert-manager control plane"
+      echo "  --argocd            Argo CD GitOps control plane"
+      echo "  --kyverno           Kyverno policy control plane"
+      echo "  --platform-all      Deploy cert-manager/Argo CD/Kyverno + etcd/OpenBao/Loki/Velero/Renovate"
       echo "  --all               全部"
       echo "  --ingress           启用 Ingress (默认 NodePort)"
       echo "  --domain <d>        Ingress 域名 (默认 registry.local)"
@@ -129,7 +136,7 @@ done
     APISIX=1 SHENYU=1 DUBBO=1 SEATA=1 XXL_JOB=1 PROMETHEUS=1 PULSAR=1 FLINK=1 JENKINS=1 SBA=1
 
 # ── --platform-all 快捷（不改变现有 --all 的范围）──
-[ -n "$PLATFORM_ALL" ] && ETCD=1 OPENBAO=1 LOKI=1 VELERO=1 RENOVATE=1
+[ -n "$PLATFORM_ALL" ] && CERT_MANAGER=1 ARGOCD=1 KYVERNO=1 ETCD=1 OPENBAO=1 LOKI=1 VELERO=1 RENOVATE=1
 
 # ── 依赖自动推导 ──
 [ -n "$NACOS" ]   && MYSQL=1    # Nacos 需要 MySQL
@@ -193,11 +200,11 @@ fi
 
 step "添加 Helm Repo"
 for r in bitnami:https://charts.bitnami.com/bitnami elastic:https://helm.elastic.co harbor:https://helm.goharbor.io \
-         nacos-group:https://nacos-group.github.io/nacos-helm apache:https://apache.jfrog.io/artifactory/skywalking-helm \
+         jetstack:https://charts.jetstack.io nacos-group:https://nacos-group.github.io/nacos-helm apache:https://apache.jfrog.io/artifactory/skywalking-helm \
          apolloconfig:https://apolloconfig.github.io/apollo-helm tdengine:https://tdengine.github.io/helm-charts \
-         shenyu:https://apache.github.io/shenyu-helm-chart \
+         argo:https://argoproj.github.io/argo-helm shenyu:https://apache.github.io/shenyu-helm-chart \
          apisix:https://apache.github.io/apisix-helm-chart \
-         openbao:https://openbao.github.io/openbao-helm \
+         openbao:https://openbao.github.io/openbao-helm kyverno:https://kyverno.github.io/kyverno \
          grafana-community:https://grafana-community.github.io/helm-charts \
          grafana:https://grafana.github.io/helm-charts \
          vmware-tanzu:https://vmware-tanzu.github.io/helm-charts \
@@ -221,6 +228,9 @@ fi
 # ══════════════════════════════════
 
 # -- 基础存储 --
+[ -n "$CERT_MANAGER" ] && step "--- cert-manager ---" && \
+  hlm "cert-manager" "jetstack/cert-manager" "$CFG/cert-manager-values.yaml"
+
 [ -n "$MYSQL" ] && step "--- MySQL 3-node ---" && \
   hlm "mysql" "bitnami/mysql" "$CFG/mysql-values.yaml"
 
@@ -280,6 +290,12 @@ fi
 # -- 密钥管理 --
 [ -n "$OPENBAO" ] && step "--- OpenBao 3-node Raft ---" && \
   hlm "openbao" "openbao/openbao" "$CFG/openbao-values.yaml" --timeout 15m
+
+[ -n "$ARGOCD" ] && step "--- Argo CD GitOps ---" && \
+  hlm "argocd" "argo/argo-cd" "$CFG/argocd-values.yaml"
+
+[ -n "$KYVERNO" ] && step "--- Kyverno policy ---" && \
+  hlm "kyverno" "kyverno/kyverno" "$CFG/kyverno-values.yaml"
 
 # -- 时序 --
 [ -n "$TDENGINE" ] && step "--- TDengine 3-node ---" && \
@@ -390,6 +406,9 @@ echo ""
 [ -n "$SENTINEL" ] && echo "  Sentinel   : sentinel-dashboard.$NAMESPACE.svc:8080 (sentinel / sentinel123)"
 [ -n "$SKYWALKING" ] && echo "  SkyWalking : skywalking-oap.$NAMESPACE.svc:11800"
 [ -n "$OPENBAO" ] && echo "  OpenBao    : openbao.$NAMESPACE.svc:8200 (等待 init/unseal)"
+[ -n "$CERT_MANAGER" ] && echo "  cert-manager: controllers + CRDs (no Issuer/Certificate created)"
+[ -n "$ARGOCD" ] && echo "  Argo CD    : https://${NODE_IP}:30013 (admin / initial password secret)"
+[ -n "$KYVERNO" ] && echo "  Kyverno    : admission/background/cleanup/reports controllers"
 [ -n "$TDENGINE" ] && echo "  TDengine   : tdengine.$NAMESPACE.svc:6030 (root / taosdata)"
 [ -n "$SHARDINGSPHERE" ] && echo "  ShardingSphere : shardingsphere-proxy.$NAMESPACE.svc:3307 (MySQL协议)"
 [ -n "$APISIX" ] && echo "  APISIX     : http://${NODE_IP}:30011"

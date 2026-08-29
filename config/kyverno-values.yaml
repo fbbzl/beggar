@@ -1,0 +1,72 @@
+# Minimum highly available Kyverno policy control plane. No Policy,
+# ClusterPolicy, PolicyException, or policy bundle is installed by this profile.
+
+admissionController:
+  replicas: 3
+  # Replace the chart's preferred rule with a hard host-level rule.
+  antiAffinity:
+    enabled: false
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: admission-controller
+        topologyKey: kubernetes.io/hostname
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  certManager:
+    enabled: false
+
+backgroundController:
+  enabled: true
+  replicas: 2
+  antiAffinity:
+    enabled: false
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: background-controller
+        topologyKey: kubernetes.io/hostname
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+cleanupController:
+  enabled: true
+  replicas: 2
+  antiAffinity:
+    enabled: false
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: cleanup-controller
+        topologyKey: kubernetes.io/hostname
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  certManager:
+    enabled: false
+
+reportsController:
+  enabled: true
+  replicas: 2
+  antiAffinity:
+    enabled: false
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/component: reports-controller
+        topologyKey: kubernetes.io/hostname
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+grafana:
+  enabled: false
+
+reportsServer:
+  enabled: false

@@ -37,7 +37,7 @@ bash deploy-registry-stack.sh --mysql --redis --kafka --nacos
 # Start minimum-HA APISIX (2 gateways + 3 etcd; needs at least 3 nodes)
 bash deploy-registry-stack.sh --apisix
 
-# Add the platform toolchain (etcd/OpenBao/Loki/Velero/Renovate)
+# Add the platform toolchain (cert-manager/Argo CD/Kyverno/etcd/OpenBao/Loki/Velero/Renovate)
 bash deploy-registry-stack.sh --platform-all
 
 # Production: 3 physical machines K3s HA
@@ -105,7 +105,7 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 │  Harbor (image registry)                                     │
 │                                                               │
 │  Platform engineering ────────────────────────────────────  │
-│  OpenBao(3)  Loki HA + Alloy(2)  Velero  Renovate CronJob    │
+│  cert-manager  Argo CD  Kyverno  OpenBao(3)  Loki+Alloy      │
 │                                                               │
 │  🛡  HA profiles use PDBs/anti-affinity; see exceptions below│
 └──────────────────────────────────────────────────────────────┘
@@ -143,15 +143,18 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | 24 | 🌊 **Flink** | `--flink` | `-Flink` | 1+2 | Apache | Stream processing |
 | 25 | 🏗️ **Jenkins** | `--jenkins` | `-Jenkins` | 1 | Jenkins | CI/CD |
 | 26 | 🟢 **Spring Boot Admin** | `--spring-boot-admin` | `-Sba` | 2 | codecentric | App monitoring |
-| 27 | 🧱 **Independent etcd** | `--etcd` | `-Etcd` | 3 | Bitnami/etcd | Standalone coordination store; not shared with APISIX |
-| 28 | 🔐 **OpenBao** | `--openbao` | `-OpenBao` | 3 | OpenBao | Raft secret store; manual init/unseal |
-| 29 | 🪵 **Loki + Alloy** | `--loki` | `-Loki` | 3+3+3+2+2 | Grafana | HA log store and clustered collection (+MinIO/S3) |
-| 30 | 💾 **Velero** | `--velero` | `-Velero` | 1+DaemonSet | Velero | Kubernetes backup controller and node agents (+MinIO/S3) |
-| 31 | 🤖 **Renovate** | `--renovate` | `-Renovate` | CronJob | Renovate | Dependency updates; suspended by default |
-| 32 | 🧰 **Platform tools** | `--platform-all` | `-PlatformAll` | - | - | Deploy rows 27–31; leaves `--all` unchanged |
-| 33 | 🎯 **All** | `--all` | `-WithAll` | - | - | Deploy the original middleware set |
+| 27 | 🪪 **cert-manager** | `--cert-manager` | `-CertManager` | 2+3+2 | Jetstack | Certificate lifecycle controllers and CRDs; no Issuer created |
+| 28 | 🚢 **Argo CD** | `--argocd` | `-ArgoCD` | 2+2+2+HA Redis | Argo Project | GitOps continuous delivery control plane |
+| 29 | 🛡️ **Kyverno** | `--kyverno` | `-Kyverno` | 3+2+2+2 | Kyverno | Policy admission and reports control plane; no policies installed |
+| 30 | 🧱 **Independent etcd** | `--etcd` | `-Etcd` | 3 | Bitnami/etcd | Standalone coordination store; not shared with APISIX |
+| 31 | 🔐 **OpenBao** | `--openbao` | `-OpenBao` | 3 | OpenBao | Raft secret store; manual init/unseal |
+| 32 | 🪵 **Loki + Alloy** | `--loki` | `-Loki` | 3+3+3+2+2 | Grafana | HA log store and clustered collection (+MinIO/S3) |
+| 33 | 💾 **Velero** | `--velero` | `-Velero` | 1+DaemonSet | Velero | Kubernetes backup controller and node agents (+MinIO/S3) |
+| 34 | 🤖 **Renovate** | `--renovate` | `-Renovate` | CronJob | Renovate | Dependency updates; suspended by default |
+| 35 | 🧰 **Platform tools** | `--platform-all` | `-PlatformAll` | - | - | Deploy rows 27–34; leaves `--all` unchanged |
+| 36 | 🎯 **All** | `--all` | `-WithAll` | - | - | Deploy the original middleware set |
 
-> 💡 `--loki` and `--velero` automatically include MinIO. `--platform-all` contains only the new platform tools and does not expand the existing `--all` set.
+> 💡 `--loki` and `--velero` automatically include MinIO. `--platform-all` contains only the platform tools and does not expand the existing `--all` set.
 
 ---
 
@@ -167,6 +170,8 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 | `30009` | Sentinel API | Monitoring API |
 | `30010` | RocketMQ NameServer | Message queue client |
 | `30011` | APISIX HTTP | API gateway entrypoint |
+| `30012` | Argo CD HTTP service port | Routes to the Argo CD server |
+| `30013` | Argo CD HTTPS | GitOps UI/API over TLS |
 | `30307` | ShardingSphere-Proxy | MySQL sharding endpoint |
 
 ---
@@ -206,6 +211,9 @@ beggar/
     ├── apollo-values.yaml            # Apollo config (needs MySQL)
     ├── tdengine-values.yaml          # TDengine config
     ├── apisix-values.yaml            # APISIX gateway config
+    ├── cert-manager-values.yaml      # cert-manager HA control plane
+    ├── argocd-values.yaml            # Argo CD GitOps control plane
+    ├── kyverno-values.yaml           # Kyverno policy control plane
     ├── openbao-values.yaml           # OpenBao 3-node Raft
     ├── loki-values.yaml              # Loki SimpleScalable HA
     ├── alloy-values.yaml             # Clustered Alloy collectors
@@ -223,7 +231,7 @@ Like the other Helm middleware, APISIX HA is deployed through the `helm` / `kube
 
 ## 🧰 Platform tool notes
 
-Install all five additions in one command. Loki and Velero automatically include MinIO in the same namespace:
+Install all platform additions in one command. Loki and Velero automatically include MinIO in the same namespace:
 
 ```bash
 bash deploy-registry-stack.sh --platform-all
@@ -231,6 +239,12 @@ bash deploy-registry-stack.sh --platform-all
 ```
 
 Independent etcd uses three replicas, hard anti-affinity, and a PDB with `minAvailable: 2`. Its endpoint is `etcd.registry-stack.svc:2379`, and it never replaces APISIX's bundled etcd. The repository password is only a local/demo default; change `config/etcd-values.yaml` before using a shared environment.
+
+cert-manager installs only the controllers and CRDs. Create an `Issuer` or `ClusterIssuer` and `Certificate` resources separately for your environment.
+
+Argo CD exposes a NodePort service at `https://<NodeIP>:30013`. The initial admin password remains in the chart-created secret; rotate it before use outside a trusted network.
+
+Kyverno installs only the admission, background, cleanup, and reports controllers. No policy bundle is installed by default, so enforcement begins only after you add policies.
 
 OpenBao intentionally remains uninitialized and sealed after installation. Securely retain the recovery keys and root token from the first command, then initialize one node, join the two followers to Raft, and unseal each node:
 
