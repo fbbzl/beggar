@@ -24,9 +24,31 @@
 
 ### 🐧 Linux
 
+首版支持全新安装的 **Ubuntu Desktop 24.04 LTS / 带图形桌面的 Debian 13，x86_64**，需要 systemd 和 `/dev/kvm` 读写权限。将本仓库完整复制或解压到已安装的系统后，在登录用户的桌面终端里进入仓库目录，执行 `bash bootstrap-linux.sh`。基座会从官方源安装 Rancher Desktop，用 Moby 作为容器引擎，并关闭内置 Kubernetes，同时安装 k3d；安装详情、重跑与验证边界见 [Linux 安装说明](docs/linux-bootstrap.md)。
+
 ```bash
-# 一行起飞（3 节点本地集群 + 全量中间件）
-bash deploy-k8s-cluster.sh k3d && bash deploy-registry-stack.sh --all
+# 先预览完整流程
+bash bootstrap-linux.sh --dry-run
+
+# 只安装基座
+bash bootstrap-linux.sh --base-only
+
+# 从空白系统安装基座并创建 3 节点开发集群
+bash bootstrap-linux.sh
+
+# 在上述集群上增加一个组件，先观察效果
+bash bootstrap-linux.sh --minio
+
+# 明确需要全量时执行（资源需求取决于所选组件）
+bash bootstrap-linux.sh --all
+
+# 后续直接使用中间件脚本时，显式选择项目集群
+KUBECONFIG="$HOME/.kube/beggar-cluster.yaml" bash deploy-registry-stack.sh --minio
+```
+
+以下为**已具备工具链和目标集群 kubeconfig**时的独立入口：
+
+```bash
 
 # 按需组合
 bash deploy-registry-stack.sh --mysql --redis --kafka --nacos
@@ -39,6 +61,7 @@ bash deploy-registry-stack.sh --platform-all
 
 # 生产环境：3 台物理机 K3s HA
 NODE_IPS=10.0.0.1,10.0.0.2,10.0.0.3 bash deploy-k8s-cluster.sh k3s
+export KUBECONFIG="$HOME/.kube/config-beggar"
 bash deploy-registry-stack.sh --all
 
 # 先校验不部署
@@ -46,6 +69,8 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 ```
 
 ### 🪟 Windows
+
+Windows 基座安装将在 Linux 效果确认后补齐；以下命令仍要求已有基础环境。
 
 ```powershell
 # 本地集群 + 全量

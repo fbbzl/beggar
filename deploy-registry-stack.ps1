@@ -167,6 +167,9 @@ if (-not $DryRun) {
 }
 
 step "Helm Repos"
+if ($DryRun) {
+    Write-Host "  [DRY-RUN] helm repo add/update (skipped; no network or local Helm state changes)" -ForegroundColor DarkGray
+} else {
 helm repo add bitnami https://charts.bitnami.com/bitnami 2>$null | Out-Null
 helm repo add elastic https://helm.elastic.co 2>$null | Out-Null
 helm repo add harbor https://helm.goharbor.io 2>$null | Out-Null
@@ -187,6 +190,7 @@ helm repo add prometheus-community https://prometheus-community.github.io/helm-c
 helm repo add apachepulsar https://pulsar.apache.org/charts 2>$null | Out-Null
 helm repo add jenkins https://charts.jenkins.io 2>$null | Out-Null
 helm repo update 2>$null | Out-Null
+}
 ok "Repos"
 
 step "Namespace: $Namespace"

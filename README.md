@@ -27,9 +27,29 @@
 
 ### 🐧 Linux
 
+The Linux bootstrap supports a freshly installed **Ubuntu Desktop 24.04 LTS / Debian 13 desktop system, x86_64**, with systemd and read/write access to `/dev/kvm`. Copy or extract this repository onto the installed OS, open a desktop terminal as the login user, then run `bash bootstrap-linux.sh` from its directory. The base installs Rancher Desktop from the official repo, starts it with Moby and built-in Kubernetes disabled, and installs k3d. See [Linux installation details](docs/linux-bootstrap.md) for prerequisites, recovery, and verification limits.
+
 ```bash
-# One-shot: 3-node local cluster + all middleware
-bash deploy-k8s-cluster.sh k3d && bash deploy-registry-stack.sh --all
+# Preview the full flow
+bash bootstrap-linux.sh --dry-run
+
+# Install only the base
+bash bootstrap-linux.sh --base-only
+
+# Install the base and create a three-node development cluster
+bash bootstrap-linux.sh
+
+# Add a small first workload, or explicitly select the full stack
+bash bootstrap-linux.sh --minio
+bash bootstrap-linux.sh --all
+
+# Explicitly select the project cluster for standalone middleware commands
+KUBECONFIG="$HOME/.kube/beggar-cluster.yaml" bash deploy-registry-stack.sh --minio
+```
+
+The standalone commands below assume an existing toolchain and target kubeconfig:
+
+```bash
 
 # Pick what you need
 bash deploy-registry-stack.sh --mysql --redis --kafka --nacos
@@ -42,6 +62,7 @@ bash deploy-registry-stack.sh --platform-all
 
 # Production: 3 physical machines K3s HA
 NODE_IPS=10.0.0.1,10.0.0.2,10.0.0.3 bash deploy-k8s-cluster.sh k3s
+export KUBECONFIG="$HOME/.kube/config-beggar"
 bash deploy-registry-stack.sh --all
 
 # Validate without deploying
@@ -49,6 +70,8 @@ DRY_RUN=1 bash deploy-registry-stack.sh --all
 ```
 
 ### 🪟 Windows
+
+Windows base installation is deferred until the Linux result is reviewed. These commands still require a prepared environment.
 
 ```powershell
 # Local cluster + full stack

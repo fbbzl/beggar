@@ -166,7 +166,7 @@ hlm() {
   local out
   out=$(helm "${args[@]}" 2>&1) || {
     warn "$name 部署异常"; echo "$out" | while IFS= read -r l; do echo -e "    ${GRAY}$l${NC}"; done
-    return 1
+    exit 1
   }
   ok "$name"; return 0
 }
@@ -175,7 +175,7 @@ kube_apply() {
   [ -n "$DRY_RUN" ] && echo -e "  ${GRAY}[DRY-RUN] kubectl apply -f $(basename $1)${NC}" && return 0
   local out; out=$(kubectl apply -n "$NAMESPACE" -f "$1" 2>&1) || {
     warn "$(basename $1) 异常"; echo "$out" | while IFS= read -r l; do echo -e "  ${GRAY}$l${NC}"; done
-    return 1
+    exit 1
   }
   ok "$(basename $1)"
 }
@@ -191,9 +191,9 @@ exec_pod() {
 # 0. 前提
 # ══════════════════════════════════
 step "前提检查"
-command -v kubectl &>/dev/null || { echo "需要 kubectl" >&2; exit 1; }
-command -v helm &>/dev/null   || { echo "需要 helm" >&2; exit 1; }
 if [ -z "$DRY_RUN" ]; then
+  command -v kubectl &>/dev/null || { echo "需要 kubectl" >&2; exit 1; }
+  command -v helm &>/dev/null   || { echo "需要 helm" >&2; exit 1; }
   kubectl cluster-info --request-timeout 5s &>/dev/null || { echo "无法连接 K8s" >&2; exit 1; }
   info "K8s 已连接"
 fi
@@ -211,9 +211,17 @@ for r in bitnami:https://charts.bitnami.com/bitnami elastic:https://helm.elastic
          prometheus-community:https://prometheus-community.github.io/helm-charts \
          apachepulsar:https://pulsar.apache.org/charts \
          jenkins:https://charts.jenkins.io; do
-  helm repo add "${r%%:*}" "${r#*:}" 2>/dev/null || true
+  if [ -n "$DRY_RUN" ]; then
+    echo "[DRY-RUN] helm repo add ${r%%:*} ${r#*:}"
+  else
+    helm repo add "${r%%:*}" "${r#*:}"
+  fi
 done
-helm repo update 2>/dev/null || true
+if [ -n "$DRY_RUN" ]; then
+  echo "[DRY-RUN] helm repo update"
+else
+  helm repo update
+fi
 ok "Repos 就绪"
 
 step "命名空间: $NAMESPACE"
@@ -432,3 +440,4 @@ echo ""
 echo ""
 [ -z "$DRY_RUN" ] && kubectl get pods -n "$NAMESPACE" --ignore-not-found 2>/dev/null
 [ -n "$DRY_RUN" ] && echo -e "\n${CYAN}[DRY-RUN] 未执行实际部署${NC}"
+exit 0
