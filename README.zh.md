@@ -44,6 +44,9 @@ bash bootstrap-linux.sh --all
 
 # 后续直接使用中间件脚本时，显式选择项目集群
 KUBECONFIG="$HOME/.kube/beggar-cluster.yaml" bash deploy-registry-stack.sh --minio
+
+# 交互式安装：空白 ECS 或已有集群都能用
+bash install-ecs-stack.sh
 ```
 
 以下为**已具备工具链和目标集群 kubeconfig**时的独立入口：
@@ -204,6 +207,7 @@ Windows 基座安装将在 Linux 效果确认后补齐；以下命令仍要求�
 beggar/
 ├── deploy-k8s-cluster.sh             # 🐧 Linux：K3s 集群部署
 ├── deploy-k8s-cluster.ps1            # 🪟 Windows：K3s 集群部署
+├── install-ecs-stack.sh               # 🐧 Linux：ECS + 中间件交互式安装器
 ├── deploy-registry-stack.sh          # 🐧 Linux：中间件一键部署
 ├── deploy-registry-stack.ps1         # 🪟 Windows：中间件一键部署
 └── config/

@@ -45,6 +45,9 @@ bash bootstrap-linux.sh --all
 
 # Explicitly select the project cluster for standalone middleware commands
 KUBECONFIG="$HOME/.kube/beggar-cluster.yaml" bash deploy-registry-stack.sh --minio
+
+# Interactive install for fresh ECS nodes or existing clusters
+bash install-ecs-stack.sh
 ```
 
 The standalone commands below assume an existing toolchain and target kubeconfig:
@@ -205,6 +208,7 @@ Windows base installation is deferred until the Linux result is reviewed. These 
 beggar/
 ├── deploy-k8s-cluster.sh             # 🐧 Linux: K3s cluster setup
 ├── deploy-k8s-cluster.ps1            # 🪟 Windows: K3s cluster setup
+├── install-ecs-stack.sh               # 🐧 Linux: interactive ECS + middleware installer
 ├── deploy-registry-stack.sh          # 🐧 Linux: Middleware deploy
 ├── deploy-registry-stack.ps1         # 🪟 Windows: Middleware deploy
 └── config/
