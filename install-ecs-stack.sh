@@ -61,6 +61,18 @@ validate_ipv4() {
   done
 }
 
+validate_ssh_user() {
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || fatal "SSH 用户格式不正确"
+}
+
+validate_k3s_version() {
+  [[ $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || fatal "K3s 版本格式不正确，应类似 v1.30.2+k3s2"
+}
+
+validate_kubeconfig_path() {
+  [[ $1 = /* && $1 != *:* ]] || fatal "kubeconfig 必须是单个绝对路径: $1"
+}
+
 append_flag() {
   local flag=$1 existing
   for existing in "${DEPLOY_FLAGS_LIST[@]:-}"; do
@@ -176,7 +188,6 @@ SSH_USER="${SSH_USER:-root}"
 SSH_KEY="$(expand_home "${SSH_KEY:-$HOME/.ssh/id_rsa}")"
 KUBECONFIG_PATH="$(expand_home "${BEGGAR_KUBECONFIG:-$HOME/.kube/config-beggar}")"
 K3S_VERSION="${K3S_VERSION:-v1.30.2+k3s2}"
-CLUSTER_NAME="${CLUSTER_NAME:-beggar-cluster}"
 
 if [ -z "$INSTALL_TARGET" ]; then
   prompt_choice INSTALL_TARGET "选择安装方式 (1=空白 ECS 组建 K3s + 部署中间件, 2=仅部署已有集群中的中间件)" "1"
@@ -198,15 +209,18 @@ if [ "$INSTALL_TARGET" = "cluster-and-middleware" ]; then
   for ip in "${NODE_IP_ARRAY[@]}"; do
     validate_ipv4 "$ip"
   done
+  [ "$(printf '%s\n' "${NODE_IP_ARRAY[@]}" | sort -u | wc -l)" -eq 3 ] || fatal "3 个 IP 不能重复"
 
   prompt_value SSH_USER "SSH 用户" "$SSH_USER"
   prompt_value SSH_KEY "SSH 私钥路径" "$SSH_KEY"
   prompt_value KUBECONFIG_PATH "kubeconfig 路径" "$KUBECONFIG_PATH"
-  prompt_value CLUSTER_NAME "K3s 集群名" "$CLUSTER_NAME"
   prompt_value K3S_VERSION "K3s 版本" "$K3S_VERSION"
 
   SSH_KEY="$(expand_home "$SSH_KEY")"
   KUBECONFIG_PATH="$(expand_home "$KUBECONFIG_PATH")"
+  validate_ssh_user "$SSH_USER"
+  validate_k3s_version "$K3S_VERSION"
+  validate_kubeconfig_path "$KUBECONFIG_PATH"
   [ -f "$SSH_KEY" ] || fatal "SSH 私钥不存在: $SSH_KEY"
 fi
 
@@ -251,7 +265,6 @@ if [ "$INSTALL_TARGET" = "cluster-and-middleware" ]; then
   echo "  SSH 用户:        $SSH_USER"
   echo "  SSH 私钥:        $SSH_KEY"
   echo "  K3s 版本:        $K3S_VERSION"
-  echo "  集群名:          $CLUSTER_NAME"
 fi
 
 if [ -z "$ASSUME_YES" ]; then
@@ -265,10 +278,10 @@ fi
 if [ "$INSTALL_TARGET" = "cluster-and-middleware" ]; then
   step "第 1 步: 组建 K3s 集群"
   if [ -n "$DRY_RUN" ]; then
-    NODE_IPS="$NODE_IPS" SSH_USER="$SSH_USER" SSH_KEY="$SSH_KEY" K3D_CLUSTER="$CLUSTER_NAME" K3S_VERSION="$K3S_VERSION" BEGGAR_KUBECONFIG="$KUBECONFIG_PATH" DRY_RUN=1 \
+    NODE_IPS="$NODE_IPS" SSH_USER="$SSH_USER" SSH_KEY="$SSH_KEY" K3S_VERSION="$K3S_VERSION" BEGGAR_KUBECONFIG="$KUBECONFIG_PATH" DRY_RUN=1 \
       bash "$K3S_SCRIPT" k3s
   else
-    NODE_IPS="$NODE_IPS" SSH_USER="$SSH_USER" SSH_KEY="$SSH_KEY" K3D_CLUSTER="$CLUSTER_NAME" K3S_VERSION="$K3S_VERSION" BEGGAR_KUBECONFIG="$KUBECONFIG_PATH" \
+    NODE_IPS="$NODE_IPS" SSH_USER="$SSH_USER" SSH_KEY="$SSH_KEY" K3S_VERSION="$K3S_VERSION" BEGGAR_KUBECONFIG="$KUBECONFIG_PATH" \
       bash "$K3S_SCRIPT" k3s
   fi
 fi

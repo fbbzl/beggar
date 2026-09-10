@@ -11,11 +11,6 @@ step()  { echo -e "\n[$(date +%H:%M:%S)] >>> ${CYAN}$*${NC}"; }
 info()  { echo -e "  ${GREEN}$*${NC}"; }
 warn()  { echo -e "  ${YELLOW}[WARN] $*${NC}"; }
 fatal() { echo -e "${RED}[FATAL] $*${NC}" >&2; exit 1; }
-run() {
-  if [ -n "$DRY_RUN" ]; then echo -e "  ${GRAY}[DRY-RUN] $*${NC}"; return 0; fi
-  echo -e "  ${GRAY}> $*${NC}"
-  eval "$@" 2>&1 || fatal "命令执行失败: $*"
-}
 
 run_args() {
   printf '  %s' "${DRY_RUN:+[DRY-RUN] }"
@@ -24,9 +19,23 @@ run_args() {
   [ -n "$DRY_RUN" ] || "$@"
 }
 
-run_sensitive() {
-  if [ -n "$DRY_RUN" ]; then return 0; fi
-  eval "$1" 2>&1 || fatal "敏感命令执行失败"
+quote_for_remote_sh() {
+  printf "'%s'" "${1//\'/\'\"\'\"\'}"
+}
+
+validate_ipv4() {
+  local ip=$1 part
+  [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fatal "IP 格式不正确: $ip"
+  IFS='.' read -r -a parts <<< "$ip"
+  for part in "${parts[@]}"; do
+    (( part >= 0 && part <= 255 )) || fatal "IP 格式不正确: $ip"
+  done
+}
+
+validate_k3s_inputs() {
+  [[ $SSH_USER =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || fatal "SSH_USER 格式不正确"
+  [[ $K3S_VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || fatal "K3S_VERSION 格式不正确，应类似 v1.30.2+k3s2"
+  [ -f "$SSH_KEY" ] || fatal "SSH 私钥不存在: $SSH_KEY"
 }
 
 detect_os() {
@@ -128,7 +137,11 @@ if [ "$MODE" = "k3d" ]; then
 elif [ "$MODE" = "k3s" ]; then
   [ -z "$NODE_IPS" ] && fatal "请设置 NODE_IPS 环境变量，逗号分隔，例如: NODE_IPS=10.0.0.1,10.0.0.2,10.0.0.3"
   IFS=',' read -ra IPS <<< "$NODE_IPS"
-  [ ${#IPS[@]} -lt 3 ] && warn "HA 需要至少 3 节点，当前 ${#IPS[@]} 节点"
+  [ ${#IPS[@]} -ge 3 ] || fatal "HA 集群至少需要 3 个节点，当前 ${#IPS[@]} 个"
+  for node in "${IPS[@]}"; do
+    validate_ipv4 "$node"
+  done
+  [ "$(printf '%s\n' "${IPS[@]}" | sort -u | wc -l)" -eq "${#IPS[@]}" ] || fatal "NODE_IPS 不能包含重复 IP"
   FIRST="${IPS[0]}"
 
   if [ -n "$DRY_RUN" ]; then
@@ -137,34 +150,47 @@ elif [ "$MODE" = "k3s" ]; then
   else
 
   require_cmd "ssh" "openssh-client"
+  require_cmd "scp" "openssh-client"
+  validate_k3s_inputs
+  SSH_BASE=(ssh -i "$SSH_KEY" -o "StrictHostKeyChecking=$SSH_STRICT_HOST_KEY_CHECKING" -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS")
+  SCP_BASE=(scp -i "$SSH_KEY" -o "StrictHostKeyChecking=$SSH_STRICT_HOST_KEY_CHECKING" -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS")
 
   for node in "${IPS[@]}"; do
     step "检查节点: $node"
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking="$SSH_STRICT_HOST_KEY_CHECKING" -o UserKnownHostsFile="$SSH_KNOWN_HOSTS" -o ConnectTimeout=5 "$SSH_USER@$node" hostname 2>/dev/null || \
+    "${SSH_BASE[@]}" -o ConnectTimeout=5 "$SSH_USER@$node" hostname 2>/dev/null || \
       fatal "无法连接 $node (ssh -i $SSH_KEY $SSH_USER@$node)"
     info "$node OK"
   done
 
   step "初始化第一个节点: $FIRST"
-  run "ssh -i '$SSH_KEY' -o StrictHostKeyChecking='$SSH_STRICT_HOST_KEY_CHECKING' -o UserKnownHostsFile='$SSH_KNOWN_HOSTS' '$SSH_USER@$FIRST' 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$K3S_VERSION INSTALL_K3S_EXEC=\"--cluster-init --tls-san $FIRST --disable traefik --write-kubeconfig-mode 644\" sh -'"
+  initial_exec="--cluster-init --tls-san $FIRST --disable traefik --write-kubeconfig-mode 644"
+  initial_command="curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$(quote_for_remote_sh "$K3S_VERSION") INSTALL_K3S_EXEC=$(quote_for_remote_sh "$initial_exec") sh -"
+  run_args "${SSH_BASE[@]}" "$SSH_USER@$FIRST" "$initial_command"
   sleep 15
 
-  TOKEN=$(ssh -i "$SSH_KEY" -o StrictHostKeyChecking="$SSH_STRICT_HOST_KEY_CHECKING" -o UserKnownHostsFile="$SSH_KNOWN_HOSTS" "$SSH_USER@$FIRST" 'sudo cat /var/lib/rancher/k3s/server/node-token' 2>/dev/null | tail -1)
+  TOKEN=$("${SSH_BASE[@]}" "$SSH_USER@$FIRST" 'sudo cat /var/lib/rancher/k3s/server/node-token' 2>/dev/null | tail -1)
   [ -z "$TOKEN" ] && fatal "无法获取节点 token"
   info "Token 获取成功"
 
   for node in "${IPS[@]:1}"; do
     step "加入节点: $node"
-    run_sensitive "ssh -i '$SSH_KEY' -o StrictHostKeyChecking='$SSH_STRICT_HOST_KEY_CHECKING' -o UserKnownHostsFile='$SSH_KNOWN_HOSTS' '$SSH_USER@$node' 'curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$K3S_VERSION INSTALL_K3S_EXEC=\"--server https://${FIRST}:6443 --token ${TOKEN} --disable traefik --write-kubeconfig-mode 644\" sh -'"
+    join_exec="--server https://${FIRST}:6443 --token ${TOKEN} --disable traefik --write-kubeconfig-mode 644"
+    join_command="curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=$(quote_for_remote_sh "$K3S_VERSION") INSTALL_K3S_EXEC=$(quote_for_remote_sh "$join_exec") sh -"
+    run_args "${SSH_BASE[@]}" "$SSH_USER@$node" "$join_command"
   done
 
-  mkdir -p "$HOME/.kube"
-  run "scp -i '$SSH_KEY' -o StrictHostKeyChecking='$SSH_STRICT_HOST_KEY_CHECKING' -o UserKnownHostsFile='$SSH_KNOWN_HOSTS' '$SSH_USER@$FIRST:/etc/rancher/k3s/k3s.yaml' '$HOME/.kube/config-beggar'"
-  export KUBECONFIG="$HOME/.kube/config-beggar"
+  KUBECONFIG="${BEGGAR_KUBECONFIG:-$HOME/.kube/config-beggar}"
+  [[ "$KUBECONFIG" = /* && "$KUBECONFIG" != *:* ]] || fatal "BEGGAR_KUBECONFIG 必须为单个绝对路径"
+  [ ! -e "$KUBECONFIG" ] && [ ! -L "$KUBECONFIG" ] || fatal "kubeconfig 已存在，为避免覆盖请指定新的 BEGGAR_KUBECONFIG: $KUBECONFIG"
+  mkdir -p "$(dirname "$KUBECONFIG")"
+  run_args "${SCP_BASE[@]}" "$SSH_USER@$FIRST:/etc/rancher/k3s/k3s.yaml" "$KUBECONFIG"
+  sed -i "s#127.0.0.1#$FIRST#g" "$KUBECONFIG"
+  chmod 600 "$KUBECONFIG"
+  export KUBECONFIG
   kubectl cluster-info || fatal "K3s 控制面尚未就绪"
   kubectl wait --for=condition=Ready nodes --all --timeout=180s || fatal "K3s 节点尚未全部 Ready"
-  info "kubeconfig: $HOME/.kube/config-beggar"
-  info "使用: export KUBECONFIG=$HOME/.kube/config-beggar"
+  info "kubeconfig: $KUBECONFIG"
+  info "使用: export KUBECONFIG=$KUBECONFIG"
   fi
 
 # ────────────────────────────────
