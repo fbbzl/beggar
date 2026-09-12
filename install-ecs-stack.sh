@@ -165,6 +165,7 @@ usage() {
   DEPLOY_SELECTION=1,4 | all | platform-all | custom
   DEPLOY_FLAGS="--mysql --redis"
   ASSUME_YES=1
+  VIEW_STATUS=y | n
   DRY_RUN=1
 
 类别编号：
@@ -174,6 +175,7 @@ EOF
 
 DRY_RUN="${DRY_RUN:-}"
 ASSUME_YES="${ASSUME_YES:-}"
+VIEW_STATUS="${VIEW_STATUS:-}"
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
@@ -293,11 +295,25 @@ else
   KUBECONFIG="$KUBECONFIG_PATH" bash "$REGISTRY_SCRIPT" "${DEPLOY_FLAGS_LIST[@]}"
 fi
 
+if [ -z "$DRY_RUN" ] && [ -z "$VIEW_STATUS" ] && [ -n "$ASSUME_YES" ]; then
+  VIEW_STATUS=n
+fi
+
 if [ -z "$DRY_RUN" ]; then
-  step "第 3 步: 验证结果"
-  KUBECONFIG="$KUBECONFIG_PATH" kubectl get nodes -o wide
-  KUBECONFIG="$KUBECONFIG_PATH" kubectl get pods -n registry-stack
-  KUBECONFIG="$KUBECONFIG_PATH" kubectl get svc -n registry-stack
+  if [ -z "$VIEW_STATUS" ]; then
+    prompt_choice VIEW_STATUS "是否立即查看节点状态？输入 y 查看" "n"
+  fi
+
+  case "$VIEW_STATUS" in
+    y|Y|yes|YES)
+      step "第 3 步: 查看集群状态"
+      KUBECONFIG="$KUBECONFIG_PATH" kubectl get nodes -o wide
+      KUBECONFIG="$KUBECONFIG_PATH" kubectl get pods -n registry-stack
+      KUBECONFIG="$KUBECONFIG_PATH" kubectl get svc -n registry-stack
+      ;;
+    n|N|no|NO) ;;
+    *) fatal "查看节点状态仅支持 y 或 n" ;;
+  esac
 fi
 
 step "完成"

@@ -87,6 +87,40 @@ grep -q registry-called <<<"$output"
 grep -q -- '--platform-all' <<<"$output"
 '
 
+check_case success 'status option queries the selected cluster' '
+script="'"$script"'"
+real_bash=$(command -v bash)
+stub_dir=$(mktemp -d)
+log_file="$stub_dir/calls.log"
+cat > "$stub_dir/bash" <<EOF
+#!$real_bash
+set -euo pipefail
+case "\${1:-}" in
+  -c|-lc) exec "$real_bash" "\$@" ;;
+  *deploy-registry-stack.sh) exit 0 ;;
+  *) exec "$real_bash" "\$@" ;;
+esac
+EOF
+cat > "$stub_dir/kubectl" <<EOF
+#!$real_bash
+set -euo pipefail
+printf "%s|%s\\n" "\$KUBECONFIG" "\$*" >>"$log_file"
+EOF
+chmod +x "$stub_dir/bash" "$stub_dir/kubectl"
+PATH="$stub_dir:$PATH" \
+INSTALL_TARGET=middleware-only \
+DEPLOY_SELECTION=custom \
+DEPLOY_FLAGS=--mysql \
+ASSUME_YES=1 \
+VIEW_STATUS=y \
+BEGGAR_KUBECONFIG="$stub_dir/mysql-ecs.yaml" \
+"$real_bash" "$script" >/dev/null
+[ "$(wc -l < "$log_file")" -eq 3 ]
+grep -Fqx "$stub_dir/mysql-ecs.yaml|get nodes -o wide" "$log_file"
+grep -Fqx "$stub_dir/mysql-ecs.yaml|get pods -n registry-stack" "$log_file"
+grep -Fqx "$stub_dir/mysql-ecs.yaml|get svc -n registry-stack" "$log_file"
+'
+
 check_case failure 'reject invalid ip' '
 script="'"$script"'"
 ASSUME_YES=1 \
