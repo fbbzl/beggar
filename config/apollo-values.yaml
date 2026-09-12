@@ -4,7 +4,7 @@
 configService:
   replicaCount: 3
   image:
-    tag: "2.3.0"
+    tag: "2.4.0"
   service:
     type: ClusterIP
   resources:
@@ -18,7 +18,7 @@ configService:
 adminService:
   replicaCount: 3
   image:
-    tag: "2.3.0"
+    tag: "2.4.0"
   service:
     type: ClusterIP
   resources:
@@ -33,7 +33,7 @@ portal:
   enabled: true
   replicaCount: 2
   image:
-    tag: "2.3.0"
+    tag: "2.4.0"
   service:
     type: NodePort
     nodePort: 30007

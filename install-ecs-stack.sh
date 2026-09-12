@@ -117,9 +117,9 @@ selection_to_flags() {
     token="$(trim "$token")"
     [ -n "$token" ] || continue
     case "$token" in
-      1) append_flags --mysql --pg --redis --minio --tdengine ;;
+      1) append_flags --mysql --pg --redis --minio ;;
       2) append_flags --kafka --es --mongo --zk --etcd --rocketmq --pulsar --flink ;;
-      3) append_flags --nacos --apollo --shardingsphere --xxl-job ;;
+      3) append_flags --apollo --shardingsphere --xxl-job ;;
       4) append_flags --apisix --shenyu --dubbo --seata --sentinel --skywalking --harbor --prometheus --jenkins --spring-boot-admin ;;
       5) append_flags --cert-manager --argocd --kyverno --openbao --loki --velero --renovate ;;
       6) DEPLOY_FLAGS_LIST=(--all) ; return 0 ;;
@@ -134,9 +134,9 @@ selection_to_flags() {
 show_menu() {
   cat <<'EOF'
 部署范围：
-  1) 数据库 / 基础存储（MySQL, PostgreSQL, Redis, MinIO, TDengine）
+  1) 数据库 / 基础存储（MySQL, PostgreSQL, Redis, MinIO；TDengine 暂不可自动部署）
   2) 消息 / 搜索 / 协调（Kafka, Elasticsearch, MongoDB, ZooKeeper, etcd, RocketMQ, Pulsar, Flink）
-  3) 注册 / 配置 / 分库（Nacos, Apollo, ShardingSphere, XXL-JOB）
+  3) 注册 / 配置 / 分库（Apollo, ShardingSphere, XXL-JOB；Nacos 暂不可自动部署）
   4) 网关 / 治理 / 监控（APISIX, ShenYu, Dubbo, Seata, Sentinel, SkyWalking, Harbor, Prometheus, Jenkins, Spring Boot Admin）
   5) 平台工具（cert-manager, Argo CD, Kyverno, OpenBao, Loki, Velero, Renovate）
   6) 全量（--all）
@@ -164,6 +164,7 @@ usage() {
   K3S_VERSION=v1.30.2+k3s2
   DEPLOY_SELECTION=1,4 | all | platform-all | custom
   DEPLOY_FLAGS="--mysql --redis"
+  BEGGAR_VERSION_OVERRIDES="mysql=12.3.5,redis=27.0.13"
   ASSUME_YES=1
   VIEW_STATUS=y | n
   DRY_RUN=1
@@ -176,6 +177,8 @@ EOF
 DRY_RUN="${DRY_RUN:-}"
 ASSUME_YES="${ASSUME_YES:-}"
 VIEW_STATUS="${VIEW_STATUS:-}"
+BEGGAR_VERSION_OVERRIDES="${BEGGAR_VERSION_OVERRIDES:-}"
+VERSION_MODE="${VERSION_MODE:-}"
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
@@ -254,12 +257,28 @@ esac
 
 [ ${#DEPLOY_FLAGS_LIST[@]} -gt 0 ] || fatal "未选择任何部署项"
 
+if [ -z "$BEGGAR_VERSION_OVERRIDES" ]; then
+  if [ -n "$ASSUME_YES" ]; then
+    VERSION_MODE=y
+  elif [ -z "$VERSION_MODE" ]; then
+    prompt_choice VERSION_MODE "是否使用默认版本？输入 y 使用默认版本，输入 n 指定版本" "y"
+  fi
+  case "$VERSION_MODE" in
+    y|Y|yes|YES) BEGGAR_VERSION_OVERRIDES="" ;;
+    n|N|no|NO)
+      prompt_value BEGGAR_VERSION_OVERRIDES "输入版本覆盖（组件=版本；Helm 覆盖 Chart，原生清单覆盖镜像标签；逗号分隔）" ""
+      ;;
+    *) fatal "版本选择仅支持 y 或 n" ;;
+  esac
+fi
+
 step "安装计划"
 echo "  安装方式:        $INSTALL_TARGET"
 echo "  K3s 脚本:        $K3S_SCRIPT"
 echo "  中间件脚本:      $REGISTRY_SCRIPT"
 echo "  kubeconfig:      $KUBECONFIG_PATH"
 echo "  部署 flags:      ${DEPLOY_FLAGS_LIST[*]}"
+echo "  版本策略:        $([ -n "$BEGGAR_VERSION_OVERRIDES" ] && echo "覆盖: $BEGGAR_VERSION_OVERRIDES" || echo "默认版本")"
 echo "  dry-run:         ${DRY_RUN:-0}"
 
 if [ "$INSTALL_TARGET" = "cluster-and-middleware" ]; then
@@ -290,9 +309,9 @@ fi
 
 step "第 2 步: 部署中间件"
 if [ -n "$DRY_RUN" ]; then
-  KUBECONFIG="$KUBECONFIG_PATH" DRY_RUN=1 bash "$REGISTRY_SCRIPT" "${DEPLOY_FLAGS_LIST[@]}"
+  KUBECONFIG="$KUBECONFIG_PATH" BEGGAR_VERSION_OVERRIDES="$BEGGAR_VERSION_OVERRIDES" DRY_RUN=1 bash "$REGISTRY_SCRIPT" "${DEPLOY_FLAGS_LIST[@]}"
 else
-  KUBECONFIG="$KUBECONFIG_PATH" bash "$REGISTRY_SCRIPT" "${DEPLOY_FLAGS_LIST[@]}"
+  KUBECONFIG="$KUBECONFIG_PATH" BEGGAR_VERSION_OVERRIDES="$BEGGAR_VERSION_OVERRIDES" bash "$REGISTRY_SCRIPT" "${DEPLOY_FLAGS_LIST[@]}"
 fi
 
 if [ -z "$DRY_RUN" ] && [ -z "$VIEW_STATUS" ] && [ -n "$ASSUME_YES" ]; then

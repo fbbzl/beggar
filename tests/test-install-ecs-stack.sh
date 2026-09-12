@@ -36,6 +36,7 @@ case "\${1:-}" in
     echo registry >>"$log_file"
     printf "%s\n" "$*" >>"$log_file"
     printf "kubeconfig=%s\\n" "\$KUBECONFIG" >>"$log_file"
+    printf "versions=%s\\n" "\$BEGGAR_VERSION_OVERRIDES" >>"$log_file"
     exit 0 ;;
   *) exec "$real_bash" "\$@" ;;
 esac
@@ -48,12 +49,14 @@ SSH_USER=root \
 SSH_KEY="$stub_dir/id_rsa" \
 BEGGAR_KUBECONFIG="$stub_dir/config-beggar" \
 DEPLOY_SELECTION=1 \
+BEGGAR_VERSION_OVERRIDES=mysql=14.0.3 \
 ASSUME_YES=1 \
 DRY_RUN=1 \
 "$real_bash" "$script" >/dev/null
 grep -q cluster "$log_file"
 grep -q registry "$log_file"
 [ "$(grep -Fxc "kubeconfig=$stub_dir/config-beggar" "$log_file")" -eq 2 ]
+grep -Fqx 'versions=mysql=14.0.3' "$log_file"
 '
 
 check_case success 'middleware-only can deploy platform-all' '

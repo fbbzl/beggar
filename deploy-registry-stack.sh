@@ -29,6 +29,119 @@ warn()   { echo -e "  ${YELLOW}⚠ $*${NC}"; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CFG="$SCRIPT_DIR/config"
 
+# Centralized defaults keep chart and manifest versions reviewable in one place.
+set -a
+# shellcheck disable=SC1091
+. "$CFG/versions.env"
+set +a
+BEGGAR_VERSION_OVERRIDES="${BEGGAR_VERSION_OVERRIDES:-}"
+
+version_override() {
+  local component=$1 pair key value
+  component=${component//-/_}; component=${component^^}
+  [ -n "$BEGGAR_VERSION_OVERRIDES" ] || return 0
+  IFS=',' read -r -a pairs <<< "$BEGGAR_VERSION_OVERRIDES"
+  for pair in "${pairs[@]}"; do
+    key=${pair%%=*}; value=${pair#*=}; key=${key//-/_}; key=${key^^}
+    [ "$key" = "$component" ] || continue
+    [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._+:-]*$ ]] || {
+      echo "版本格式不正确: $component=$value" >&2
+      exit 1
+    }
+    printf '%s' "$value"
+    return 0
+  done
+}
+
+image_version() {
+  local component=$1 override default_name default
+  component=${component//-/_}; component=${component^^}
+  override=$(version_override "IMAGE_${component}")
+  case "$component" in
+    MYSQL|REDIS|MINIO) ;;
+    *) [ -n "$override" ] || override=$(version_override "$component") ;;
+  esac
+  [ -n "$override" ] && { printf '%s' "$override"; return 0; }
+  default_name="DEFAULT_IMAGE_TAG_${component}"
+  default=${!default_name:-}
+  [ -n "$default" ] && printf '%s' "$default"
+  return 0
+}
+
+component_version() {
+  local component=$1 override default_name default
+  case "$component" in
+    cert-manager) component=CERT_MANAGER ;;
+    elasticsearch) component=ES ;;
+    mongodb) component=MONGO ;;
+    postgresql|postgres) component=PG ;;
+    zookeeper) component=ZK ;;
+    skywalking) component=SKYWALKING ;;
+    argocd) component=ARGOCD ;;
+    kyverno) component=KYVERNO ;;
+    openbao) component=OPENBAO ;;
+    prometheus) component=PROMETHEUS ;;
+    *) component=${component^^} ;;
+  esac
+  override=$(version_override "$component")
+  [ -n "$override" ] && { printf '%s' "$override"; return 0; }
+  default_name="DEFAULT_CHART_VERSION_${component}"
+  default=${!default_name:-}
+  [ -n "$default" ] && printf '%s' "$default"
+  return 0
+}
+
+validate_version_overrides() {
+  local pair key value normalized local_component seen
+  local allowed="CERT_MANAGER MYSQL PG REDIS MINIO ES MONGO ZK ETCD KAFKA SKYWALKING APOLLO OPENBAO ARGOCD KYVERNO APISIX SHENYU PROMETHEUS LOKI ALLOY VELERO RENOVATE PULSAR JENKINS SENTINEL FLINK ROCKETMQ SEATA DUBBO XXL_JOB SHARDINGSPHERE POSTGRES NACOS TDENGINE SPRING_BOOT_ADMIN"
+  local -a seen_keys=()
+  [ -n "$BEGGAR_VERSION_OVERRIDES" ] || return 0
+  IFS=',' read -r -a pairs <<< "$BEGGAR_VERSION_OVERRIDES"
+  for pair in "${pairs[@]}"; do
+    key=${pair%%=*}; value=${pair#*=}
+    [[ "$key" =~ ^[A-Za-z][A-Za-z0-9_-]*$ && "$pair" == *=* ]] || {
+      echo "版本覆盖格式不正确，应为 component=version,...: $pair" >&2
+      exit 1
+    }
+    normalized=${key//-/_}; normalized=${normalized^^}
+    local_component=$normalized
+    if [[ "$local_component" == IMAGE_* ]]; then
+      local_component=${local_component#IMAGE_}
+    fi
+    [[ " $allowed " == *" $local_component "* ]] || {
+      echo "不支持的版本组件: $key" >&2
+      exit 1
+    }
+    for seen in "${seen_keys[@]:-}"; do
+      [ "$seen" = "$normalized" ] && {
+        echo "版本组件重复: $key" >&2
+        exit 1
+      }
+    done
+    seen_keys+=("$normalized")
+    [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._+:-]*$ ]] || {
+      echo "版本格式不正确: $pair" >&2
+      exit 1
+    }
+  done
+}
+
+unavailable_component() {
+  local component=$1 reason=$2
+  if [ -n "$DRY_RUN" ]; then
+    warn "$component 暂不执行：$reason"
+    return 0
+  fi
+  echo "${RED}[FATAL] $component 暂不支持自动部署：$reason${NC}" >&2
+  exit 1
+}
+
+validate_component_support() {
+  [ -n "$NACOS" ] && [ -z "$DRY_RUN" ] && unavailable_component "Nacos" "官方 Chart 需要从 nacos-k8s 仓库本地安装，当前脚本未自动下载"
+  [ -n "$TDENGINE" ] && [ -z "$DRY_RUN" ] && unavailable_component "TDengine" "仓库地址已失效，未找到可核验的官方 Helm Chart 来源"
+  return 0
+}
+
 # ── 全部组件初始 OFF ──
 PG=; MYSQL=; REDIS=; MINIO=; KAFKA=; ES=; MONGO=; ZK=;
 NACOS=; ROCKETMQ=; SENTINEL=; SKYWALKING=; APOLLO=; TDENGINE=; HARBOR=; SHARDINGSPHERE=
@@ -79,6 +192,7 @@ while [ $# -gt 0 ]; do
     --ingress)          WITH_INGRESS=1 ;;
     --domain)           INGRESS_DOMAIN="$2"; shift ;;
     --dry-run)          DRY_RUN=1 ;;
+    --version-overrides) BEGGAR_VERSION_OVERRIDES="$2"; shift ;;
     -h|--help)
       echo "用法: bash $0 [选项]"
       echo "选项:"
@@ -121,14 +235,17 @@ while [ $# -gt 0 ]; do
       echo "  --ingress           启用 Ingress (默认 NodePort)"
       echo "  --domain <d>        Ingress 域名 (默认 registry.local)"
       echo "  --dry-run           校验配置不实际部署"
+      echo "  --version-overrides 组件=版本,... 覆盖 Helm Chart 或原生清单镜像标签"
       echo ""
-      echo "环境变量: NAMESPACE, ADMIN_PASS, DRY_RUN"
+      echo "环境变量: NAMESPACE, ADMIN_PASS, DRY_RUN, BEGGAR_VERSION_OVERRIDES（未知或重复组件会拒绝）"
       exit 0
       ;;
     *) echo "未知选项: $1 (--help 查看帮助)"; exit 1 ;;
   esac
   shift
 done
+
+validate_version_overrides
 
 # ── --all 快捷 ──
 [ -n "$ALL" ] && PG=1 MYSQL=1 REDIS=1 MINIO=1 KAFKA=1 ES=1 MONGO=1 ZK=1 \
@@ -147,6 +264,8 @@ done
 [ -n "$LOKI" ]    && MINIO=1    # Loki 使用 S3 对象存储
 [ -n "$VELERO" ]  && MINIO=1    # Velero 使用 S3 备份存储
 
+validate_component_support
+
 # ── 无参数 → 显示帮助 ──
 if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE$APISIX$SHENYU$DUBBO$SEATA$XXL_JOB$PROMETHEUS$PULSAR$FLINK$JENKINS$SBA$ETCD$OPENBAO$LOKI$VELERO$RENOVATE" ]; then
   echo "请指定要部署的组件，例如: bash $0 --mysql"
@@ -159,8 +278,14 @@ fi
 # ══════════════════════════════════
 hlm() {
   local name=$1 chart=$2 values=$3; shift 3
-  if [ -n "$DRY_RUN" ]; then echo -e "  ${GRAY}[DRY-RUN] helm upgrade --install $name $chart${NC}"; return 0; fi
+  local component=${name//-/_} version
+  version=$(component_version "$component")
+  if [ -n "$DRY_RUN" ]; then
+    echo -e "  ${GRAY}[DRY-RUN] helm upgrade --install $name $chart${version:+ --version $version}${NC}"
+    return 0
+  fi
   local args=(upgrade --install "$name" "$chart" --namespace "$NAMESPACE" --wait --timeout 10m)
+  [ -n "$version" ] && args+=(--version "$version")
   [ -n "$values" ] && args+=(--values "$values")
   [ $# -gt 0 ] && args+=("$@")
   local out
@@ -172,12 +297,39 @@ hlm() {
 }
 
 kube_apply() {
-  [ -n "$DRY_RUN" ] && echo -e "  ${GRAY}[DRY-RUN] kubectl apply -f $(basename $1)${NC}" && return 0
-  local out; out=$(kubectl apply -n "$NAMESPACE" -f "$1" 2>&1) || {
-    warn "$(basename $1) 异常"; echo "$out" | while IFS= read -r l; do echo -e "  ${GRAY}$l${NC}"; done
-    exit 1
+  local file=$1 base=$(basename "$1") tag image_tags=""
+  local -a sed_args=()
+  case "$base" in
+    minio.yaml) tag=$(image_version MINIO); image_tags="minio=$tag"; sed_args+=(-e "s#minio/minio:[^[:space:]]+#minio/minio:$tag#g") ;;
+    sentinel-dashboard.yaml) tag=$(image_version SENTINEL); image_tags="sentinel=$tag"; sed_args+=(-e "s#sentinel-dashboard:[^\"[:space:]]+#sentinel-dashboard:$tag#g") ;;
+    flink.yaml) tag=$(image_version FLINK); image_tags="flink=$tag"; sed_args+=(-e "s#flink:[^[:space:]]+#flink:$tag#g") ;;
+    redis-sentinel.yaml) tag=$(image_version REDIS); image_tags="redis=$tag"; sed_args+=(-e "s#redis:[^[:space:]]+#redis:$tag#g") ;;
+    mysql-replication.yaml) tag=$(image_version MYSQL); image_tags="mysql=$tag"; sed_args+=(-e "s#mysql:[^[:space:]]+#mysql:$tag#g") ;;
+    shardingsphere.yaml)
+      tag=$(image_version MYSQL); image_tags="mysql=$tag"; sed_args+=(-e "s#mysql:[^[:space:]]+#mysql:$tag#g")
+      tag=$(image_version SHARDINGSPHERE); sed_args+=(-e "s#apache/shardingsphere-proxy:[^[:space:]]+#apache/shardingsphere-proxy:$tag#g")
+      image_tags+=",shardingsphere=$tag"
+      ;;
+    rocketmq.yaml) tag=$(image_version ROCKETMQ); image_tags="rocketmq=$tag"; sed_args+=(-e "s#apache/rocketmq:[^[:space:]]+#apache/rocketmq:$tag#g") ;;
+    seata.yaml) tag=$(image_version SEATA); image_tags="seata=$tag"; sed_args+=(-e "s#apache/seata-server:[^[:space:]]+#apache/seata-server:$tag#g") ;;
+    dubbo-admin.yaml) tag=$(image_version DUBBO); image_tags="dubbo=$tag"; sed_args+=(-e "s#apache/dubbo-admin:[^[:space:]]+#apache/dubbo-admin:$tag#g") ;;
+    xxl-job.yaml) tag=$(image_version XXL_JOB); image_tags="xxl-job=$tag"; sed_args+=(-e "s#xuxueli/xxl-job-admin:[^[:space:]]+#xuxueli/xxl-job-admin:$tag#g") ;;
+    spring-boot-admin.yaml) tag=$(image_version SPRING_BOOT_ADMIN); image_tags="spring-boot-admin=$tag"; sed_args+=(-e "s#codecentric/spring-boot-admin-server:[^[:space:]]+#codecentric/spring-boot-admin-server:$tag#g") ;;
+  esac
+  [ -n "$DRY_RUN" ] && echo -e "  ${GRAY}[DRY-RUN] kubectl apply -f $base${image_tags:+ (image tags $image_tags)}${NC}" && return 0
+  local out
+  if [ ${#sed_args[@]} -gt 0 ]; then
+    out=$(sed "${sed_args[@]}" "$file" | kubectl apply -n "$NAMESPACE" -f - 2>&1) || {
+      warn "$base 异常"; echo "$out" | while IFS= read -r l; do echo -e "  ${GRAY}$l${NC}"; done; exit 1;
+    }
+  else
+    out=$(kubectl apply -n "$NAMESPACE" -f "$file" 2>&1) || {
+      warn "$base 异常"; echo "$out" | while IFS= read -r l; do echo -e "  ${GRAY}$l${NC}"; done; exit 1;
+    }
+  fi
+  {
+    ok "$base"
   }
-  ok "$(basename $1)"
 }
 
 exec_pod() {
@@ -198,29 +350,42 @@ if [ -z "$DRY_RUN" ]; then
   info "K8s 已连接"
 fi
 
-step "添加 Helm Repo"
-for r in bitnami:https://charts.bitnami.com/bitnami elastic:https://helm.elastic.co harbor:https://helm.goharbor.io \
-         jetstack:https://charts.jetstack.io nacos-group:https://nacos-group.github.io/nacos-helm apache:https://apache.jfrog.io/artifactory/skywalking-helm \
-         apolloconfig:https://apolloconfig.github.io/apollo-helm tdengine:https://tdengine.github.io/helm-charts \
-         argo:https://argoproj.github.io/argo-helm shenyu:https://apache.github.io/shenyu-helm-chart \
-         apisix:https://apache.github.io/apisix-helm-chart \
-         openbao:https://openbao.github.io/openbao-helm kyverno:https://kyverno.github.io/kyverno \
-         grafana-community:https://grafana-community.github.io/helm-charts \
-         grafana:https://grafana.github.io/helm-charts \
-         vmware-tanzu:https://vmware-tanzu.github.io/helm-charts \
-         prometheus-community:https://prometheus-community.github.io/helm-charts \
-         apachepulsar:https://pulsar.apache.org/charts \
-         jenkins:https://charts.jenkins.io; do
+step "准备所选组件的 Helm Repo"
+REPO_NAMES=()
+ensure_repo() {
+  local name=$1 url=$2 existing
+  for existing in "${REPO_NAMES[@]:-}"; do
+    [ "$existing" = "$name" ] && return 0
+  done
+  REPO_NAMES+=("$name")
   if [ -n "$DRY_RUN" ]; then
-    echo "[DRY-RUN] helm repo add ${r%%:*} ${r#*:}"
+    echo "[DRY-RUN] helm repo add $name $url"
   else
-    helm repo add "${r%%:*}" "${r#*:}"
+    helm repo add "$name" "$url" --force-update >/dev/null
   fi
-done
+}
+
+[ -n "$CERT_MANAGER" ] && ensure_repo jetstack https://charts.jetstack.io
+[ -n "$PG$MYSQL$REDIS$MINIO$MONGO$ZK$ETCD$KAFKA" ] && ensure_repo bitnami https://charts.bitnami.com/bitnami
+[ -n "$ES" ] && ensure_repo elastic https://helm.elastic.co
+[ -n "$HARBOR" ] && ensure_repo harbor https://helm.goharbor.io
+[ -n "$SKYWALKING" ] && ensure_repo apache https://apache.jfrog.io/artifactory/skywalking-helm
+[ -n "$APOLLO" ] && ensure_repo apolloconfig https://charts.apolloconfig.com
+[ -n "$ARGOCD" ] && ensure_repo argo https://argoproj.github.io/argo-helm
+[ -n "$SHENYU" ] && ensure_repo shenyu https://apache.github.io/shenyu-helm-chart
+[ -n "$APISIX" ] && ensure_repo apisix https://charts.apiseven.com
+[ -n "$OPENBAO" ] && ensure_repo openbao https://openbao.github.io/openbao-helm
+[ -n "$KYVERNO" ] && ensure_repo kyverno https://kyverno.github.io/kyverno
+[ -n "$LOKI" ] && ensure_repo grafana-community https://grafana-community.github.io/helm-charts
+[ -n "$LOKI" ] && ensure_repo grafana https://grafana.github.io/helm-charts
+[ -n "$VELERO" ] && ensure_repo vmware-tanzu https://vmware-tanzu.github.io/helm-charts
+[ -n "$PROMETHEUS" ] && ensure_repo prometheus-community https://prometheus-community.github.io/helm-charts
+[ -n "$PULSAR" ] && ensure_repo apachepulsar https://pulsar.apache.org/charts
+[ -n "$JENKINS" ] && ensure_repo jenkins https://charts.jenkins.io
 if [ -n "$DRY_RUN" ]; then
-  echo "[DRY-RUN] helm repo update"
-else
-  helm repo update
+  echo "[DRY-RUN] helm repo update ${REPO_NAMES[*]}"
+elif [ ${#REPO_NAMES[@]} -gt 0 ]; then
+  helm repo update "${REPO_NAMES[@]}"
 fi
 ok "Repos 就绪"
 
@@ -276,9 +441,14 @@ fi
 
 # -- 注册 / 配置 --
 [ -n "$NACOS" ] && step "--- Nacos 3-node ---" && {
-  exec_pod "app.kubernetes.io/component=primary" \
-    "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS nacos CHARACTER SET utf8mb4;'" || true
-  hlm "nacos" "nacos-group/nacos" "$CFG/nacos-values.yaml"
+  unavailable_component "Nacos" "官方 Chart 需要从 nacos-k8s 仓库本地安装，当前脚本未自动下载"
+  if [ -n "$DRY_RUN" ]; then
+    :
+  else
+    exec_pod "app.kubernetes.io/component=primary" \
+      "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS nacos CHARACTER SET utf8mb4;'" || true
+    hlm "nacos" "nacos-group/nacos" "$CFG/nacos-values.yaml"
+  fi
 }
 
 [ -n "$APOLLO" ] && step "--- Apollo 3-node ---" && {
@@ -307,7 +477,7 @@ fi
 
 # -- 时序 --
 [ -n "$TDENGINE" ] && step "--- TDengine 3-node ---" && \
-  hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml"
+  unavailable_component "TDengine" "仓库地址已失效，未找到可核验的官方 Helm Chart 来源"
 
 # -- 分库 --
 [ -n "$SHARDINGSPHERE" ] && step "--- ShardingSphere-Proxy 多主分库 ---" && \

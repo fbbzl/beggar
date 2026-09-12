@@ -39,7 +39,7 @@ bash bootstrap-linux.sh
 # 在上述集群上增加一个组件，先观察效果
 bash bootstrap-linux.sh --minio
 
-# 明确需要全量时执行（资源需求取决于所选组件）
+# 明确需要全量时执行（资源需求取决于所选组件；Nacos、TDengine 当前会在前置检查拒绝）
 bash bootstrap-linux.sh --all
 
 # 后续直接使用中间件脚本时，显式选择项目集群
@@ -48,6 +48,24 @@ KUBECONFIG="$HOME/.kube/beggar-cluster.yaml" bash deploy-registry-stack.sh --min
 # 交互式安装：空白 ECS 或已有集群都能用
 bash install-ecs-stack.sh
 ```
+
+交互安装器会在选择组件后询问版本策略。直接输入 `y` 使用仓库内的 2026-06 默认稳定版本；输入 `n` 可一次性覆盖，例如：
+
+```text
+是否使用默认版本？输入 y 使用默认版本，输入 n 指定版本 [y]: n
+输入版本覆盖（组件=版本；Helm 覆盖 Chart，原生清单覆盖镜像标签；逗号分隔） []: mysql=14.0.3,redis=28.0.15,flink=1.20.2
+```
+
+非交互执行可使用同一套覆盖参数：
+
+```bash
+BEGGAR_VERSION_OVERRIDES=mysql=14.0.3,redis=28.0.15,flink=1.20.2 \
+  bash deploy-registry-stack.sh --mysql --redis
+```
+
+默认版本清单位于 `config/versions.env`。MySQL 默认选择 8.4 对应的 Bitnami Chart `12.3.5`；需要 MySQL 9.4 时可覆盖为 Chart `14.0.3`。版本覆盖只接受安全的版本字符，未知组件、重复组件和非法值会在部署前拒绝。纯原生清单可直接使用 `flink=1.20.2`，也支持 `image-flink=1.20.2`；与 Helm 组件同名的原生镜像使用 `image-mysql=8.4`、`image-redis=7.4` 或 `image-minio=RELEASE.2025-07-23T15-54-02Z`，可与对应的 Chart 覆盖同时传入。
+
+Nacos 当前官方推荐从 `nacos-group/nacos-k8s` 的本地 Chart 安装，TDengine 的旧 Helm 仓库也已失效；在这两个官方来源接入前，dry-run 会明确提示，真实部署会在前置检查阶段拒绝，不会留下半套安装。
 
 以下为**已具备工具链和目标集群 kubeconfig**时的独立入口：
 
@@ -142,20 +160,20 @@ Windows 基座安装将在 Linux 效果确认后补齐；以下命令仍要求�
 
 | # | 中间件 | Linux 参数 | Windows 参数 | 节点数 | 镜像来源 | 说明 |
 |---|--------|-----------|-------------|--------|---------|------|
-| 1 | 🐬 **MySQL** | `--mysql` | `-Mysql` | 3 | 官方 `mysql:8.0` | 一主二从、半同步复制 |
+| 1 | 🐬 **MySQL** | `--mysql` | `-Mysql` | 3 | Bitnami Chart `12.3.5` / MySQL `8.4` | 一主二从、半同步复制 |
 | 2 | 🐘 **PostgreSQL** | `--pg` | `-Pg` | 3 | 官方 `postgres:16` | 流复制、hot standby |
-| 3 | 🧩 **Redis** | `--redis` | `-Redis` | 3 | 官方 `redis:7` | Sentinel 高可用 |
+| 3 | 🧩 **Redis** | `--redis` | `-Redis` | 3 | Bitnami Chart `27.0.13` / Redis `8.8` | Sentinel 高可用 |
 | 4 | 📦 **MinIO** | `--minio` | `-MinIO` | 1 | 官方 `minio/minio` | S3 对象存储 |
 | 5 | 📡 **Kafka** | `--kafka` | `-Kafka` | 3 | Bitnami | KRaft 模式、无 ZooKeeper |
 | 6 | 🔍 **Elasticsearch** | `--es` | `-Es` | 3 | Elastic | 搜索 + 日志集群 |
 | 7 | 🍃 **MongoDB** | `--mongo` | `-Mongo` | 3 | Bitnami | ReplicaSet 副本集 |
 | 8 | 🦎 **ZooKeeper** | `--zk` | `-Zk` | 3 | Bitnami | 分布式协调服务 |
-| 9 | 🌐 **Nacos** | `--nacos` | `-Nacos` | 3 | Nacos 官方 | 注册中心 + 配置中心 |
+| 9 | 🌐 **Nacos** | `--nacos` | `-Nacos` | 3 | Nacos 官方 | 暂不自动部署：官方 Chart 需本地安装 |
 | 10 | 🚀 **RocketMQ** | `--rocketmq` | `-RocketMQ` | 6 | Apache | 3 NameServer + 3 Broker |
 | 11 | ⚡ **Sentinel** | `--sentinel` | `-Sentinel` | 2 | Sentinel 官方 | 流量治理可视化控制台 |
 | 12 | 📈 **SkyWalking** | `--skywalking` | `-Skywalking` | 3 | Apache | 分布式链路追踪 APM |
 | 13 | ⚙️ **Apollo** | `--apollo` | `-Apollo` | 3 | Apollo 官方 | 分布式配置中心 |
-| 14 | ⏱ **TDengine** | `--tdengine` | `-Tdengine` | 3 | TDengine | 时序数据库 |
+| 14 | ⏱ **TDengine** | `--tdengine` | `-Tdengine` | 3 | TDengine | 暂不自动部署：官方 Helm 来源待接入 |
 | 15 | 🔀 **ShardingSphere** | `--shardingsphere` | `-Shardingsphere` | 2 | Apache | MySQL 多主分库 |
 | 16 | 🏛 **Harbor** | `--harbor` | `-Harbor` | - | Harbor CNCF | 企业级镜像仓库 |
 | 17 | 🛣️ **APISIX HA** | `--apisix` | `-Apisix` | 2+3 | Apache | 最小高可用 API 网关 + etcd |
