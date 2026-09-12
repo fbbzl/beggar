@@ -156,6 +156,79 @@ function execPod($label, $cmd) {
     kubectl exec -n $Namespace $pod -- bash -c $cmd 2>&1 | Out-Null; return $true
 }
 
+function Get-OfficialChart([string]$Component, [string]$Version) {
+    $cacheRoot = if ($env:BEGGAR_CHART_CACHE) {
+        $env:BEGGAR_CHART_CACHE
+    } elseif ($env:LOCALAPPDATA) {
+        Join-Path $env:LOCALAPPDATA "beggar\\charts"
+    } else {
+        Join-Path $HOME_DIR ".cache\\beggar\\charts"
+    }
+    New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
+
+    switch ($Component) {
+        "nacos" {
+            $tag = if ($Version.StartsWith("v")) { $Version } else { "v$Version" }
+            $archive = Join-Path $cacheRoot "nacos-k8s-$tag.tar.gz"
+            if (-not (Test-Path -LiteralPath $archive)) {
+                Invoke-WebRequest -Uri "https://github.com/nacos-group/nacos-k8s/archive/refs/tags/$tag.tar.gz" -OutFile $archive
+            }
+            $topEntry = @(& tar.exe -tzf $archive)[0]
+            if ($LASTEXITCODE -ne 0 -or -not $topEntry) { throw "Nacos Chart 压缩包无效: $archive" }
+            $topDirectory = ($topEntry -split '/')[0]
+            $chartPath = Join-Path (Join-Path $cacheRoot $topDirectory) "helm"
+            if (-not (Test-Path -LiteralPath $chartPath)) {
+                & tar.exe -xzf $archive -C $cacheRoot
+                if ($LASTEXITCODE -ne 0) { throw "解压 Nacos Chart 失败: $archive" }
+            }
+            if (-not (Test-Path -LiteralPath $chartPath)) { throw "Nacos Chart 目录不存在: $chartPath" }
+            return $chartPath
+        }
+        "tdengine" {
+            $archive = Join-Path $cacheRoot "tdengine-$Version.tgz"
+            if (-not (Test-Path -LiteralPath $archive)) {
+                Invoke-WebRequest -Uri "https://raw.githubusercontent.com/taosdata/TDengine-Operator/003111e2bb4a1503fbcf760159062017def15a0b/helm/tdengine-$Version.tgz" -OutFile $archive
+            }
+            return $archive
+        }
+        default { throw "未知官方 Chart: $Component" }
+    }
+}
+
+function Install-OfficialChart([string]$Component, [string]$Name, [string]$Version, [string]$Values) {
+    if ($DryRun) {
+        $source = if ($Component -eq "nacos") { "nacos-k8s v$Version (官方 GitHub Release)" } else { "tdengine-$Version.tgz (官方 TDengine-Operator)" }
+        Write-Host "  [DRY-RUN] helm upgrade --install $Name $source --version $Version" -ForegroundColor DarkGray
+        return $true
+    }
+    $chart = Get-OfficialChart $Component $Version
+    $out = helm upgrade --install $Name $chart --namespace $Namespace --wait --timeout 10m --values (Resolve-Path $Values) 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        warn "$Name error"
+        $out | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        return $false
+    }
+    ok $Name
+    return $true
+}
+
+function Initialize-NacosDatabase {
+    if ($DryRun) {
+        Write-Host "  [DRY-RUN] 初始化 Nacos MySQL schema: https://raw.githubusercontent.com/nacos-group/nacos-k8s/v1.0.2/operator/config/sql/nacos-mysql.sql" -ForegroundColor DarkGray
+        return
+    }
+    $mysqlPod = kubectl get pod -n $Namespace -l "app.kubernetes.io/component=primary" -o jsonpath='{.items[0].metadata.name}' 2>$null
+    if (-not $mysqlPod) { throw "未找到 MySQL primary Pod，无法初始化 Nacos 数据库" }
+    kubectl exec -n $Namespace $mysqlPod -- mysql -uroot -pmysqlroot123 -e "CREATE DATABASE IF NOT EXISTS nacos CHARACTER SET utf8mb4;" 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "创建 Nacos 数据库失败" }
+    $schemaExists = (kubectl exec -n $Namespace $mysqlPod -- mysql -N -uroot -pmysqlroot123 -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='nacos' AND table_name='config_info';" 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "检查 Nacos schema 失败" }
+    if ($schemaExists -eq "1") { ok "Nacos MySQL schema"; return }
+    $schema = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/nacos-group/nacos-k8s/v1.0.2/operator/config/sql/nacos-mysql.sql").Content
+    $schema | kubectl exec -i -n $Namespace $mysqlPod -- mysql -uroot -pmysqlroot123 nacos 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "初始化 Nacos MySQL schema 失败" }
+}
+
 # precheck
 step "Prechecks"
 if (!(Get-Command helm -EA SilentlyContinue)) { Write-Host "Need helm" -ForegroundColor Red; exit 1 }
@@ -174,10 +247,8 @@ helm repo add bitnami https://charts.bitnami.com/bitnami 2>$null | Out-Null
 helm repo add elastic https://helm.elastic.co 2>$null | Out-Null
 helm repo add harbor https://helm.goharbor.io 2>$null | Out-Null
 helm repo add jetstack https://charts.jetstack.io 2>$null | Out-Null
-helm repo add nacos-group https://nacos-group.github.io/nacos-helm 2>$null | Out-Null
 helm repo add apache https://apache.jfrog.io/artifactory/skywalking-helm 2>$null | Out-Null
 helm repo add apolloconfig https://apolloconfig.github.io/apollo-helm 2>$null | Out-Null
-helm repo add tdengine https://tdengine.github.io/helm-charts 2>$null | Out-Null
 helm repo add argo https://argoproj.github.io/argo-helm 2>$null | Out-Null
 helm repo add shenyu https://apache.github.io/shenyu-helm-chart 2>$null | Out-Null
 helm repo add apisix https://apache.github.io/apisix-helm-chart 2>$null | Out-Null
@@ -215,18 +286,18 @@ if ($Etcd)  { step "--- Independent etcd ---"; hlm "etcd" "bitnami/etcd" "$CFG/e
 if ($Kafka)    { step "--- Kafka ---"; hlm "kafka" "bitnami/kafka" "$CFG/kafka-values.yaml" $null }
 if ($RocketMQ) { step "--- RocketMQ ---"; kubeApply "$CFG/manifests/rocketmq.yaml" }
 
-if ($Nacos) { step "--- Nacos ---"; execPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS nacos CHARACTER SET utf8mb4;'" | Out-Null; hlm "nacos" "nacos-group/nacos" "$CFG/nacos-values.yaml" $null }
+if ($Nacos) { step "--- Nacos ---"; Initialize-NacosDatabase; Install-OfficialChart "nacos" "nacos" "1.0.2" "$CFG/nacos-values.yaml" }
 if ($Apollo) { step "--- Apollo ---"
     execPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS ApolloConfigDB CHARACTER SET utf8mb4;'" | Out-Null
     execPod "app.kubernetes.io/component=primary" "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS ApolloPortalDB CHARACTER SET utf8mb4;'" | Out-Null
     hlm "apollo" "apolloconfig/apollo-service" "$CFG/apollo-values.yaml" $null
 }
 if ($Sentinel)   { step "--- Sentinel ---"; kubeApply "$CFG/manifests/sentinel-dashboard.yaml" }
-if ($Skywalking) { step "--- SkyWalking ---"; hlm "skywalking" "apache/skywalking-helm" "$CFG/skywalking-values.yaml" $null }
+if ($Skywalking) { step "--- SkyWalking ---"; hlm "skywalking" "apache/skywalking" "$CFG/skywalking-values.yaml" $null }
 if ($OpenBao) { step "--- OpenBao ---"; hlm "openbao" "openbao/openbao" "$CFG/openbao-values.yaml" @("--timeout", "15m") }
 if ($ArgoCD) { step "--- Argo CD ---"; hlm "argocd" "argo/argo-cd" "$CFG/argocd-values.yaml" $null }
 if ($Kyverno) { step "--- Kyverno ---"; hlm "kyverno" "kyverno/kyverno" "$CFG/kyverno-values.yaml" $null }
-if ($Tdengine)   { step "--- TDengine ---"; hlm "tdengine" "tdengine/tdengine" "$CFG/tdengine-values.yaml" $null }
+if ($Tdengine)   { step "--- TDengine ---"; Install-OfficialChart "tdengine" "tdengine" "3.5.0" "$CFG/tdengine-values.yaml" }
 if ($Shardingsphere) { step "--- ShardingSphere ---"; kubeApply "$CFG/manifests/shardingsphere.yaml" }
 
 if ($Apisix)     { step "--- APISIX ---"; hlm "apisix" "apisix/apisix" "$CFG/apisix-values.yaml" $null }

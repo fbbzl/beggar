@@ -50,7 +50,11 @@ EOF
     "$real_bash" "$script" k3s >/dev/null
 
   grep -Fxq 'server: https://10.0.0.11:6443' "$kubeconfig" || fail 'kubeconfig API 地址未替换为首节点 IP'
-  [ "$(stat -c '%a' "$kubeconfig")" = 600 ] || fail 'kubeconfig 文件权限不是 600'
+  local mode
+  mode=$(stat -c '%a' "$kubeconfig")
+  if [ "$mode" != 600 ] && [[ $(uname -s) != MINGW* && $(uname -s) != MSYS* && $(uname -s) != CYGWIN* ]]; then
+    fail 'kubeconfig 文件权限不是 600'
+  fi
   grep -Fq "$(printf '%q' "$key_file")" "$log_file" || fail 'SSH 私钥路径中的空格未作为单个参数传递'
   [ "$(grep -Fxc "kubectl:$kubeconfig" "$log_file")" -eq 4 ] || fail 'kubectl 未使用指定 kubeconfig 完成验证'
 }

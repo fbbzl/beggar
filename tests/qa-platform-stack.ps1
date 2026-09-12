@@ -83,7 +83,13 @@ has_release "$renovate" renovate
 [ "$(release_count "$renovate")" -eq 1 ]
 
 all=$(DRY_RUN=1 ./deploy-registry-stack.sh --all)
-has_release "$all" apisix
+for release in mysql pg redis minio elasticsearch mongodb zookeeper kafka nacos apollo skywalking tdengine apisix shenyu prometheus pulsar jenkins harbor; do has_release "$all" "$release"; done
+for manifest in rocketmq.yaml sentinel-dashboard.yaml shardingsphere.yaml dubbo-admin.yaml seata.yaml xxl-job.yaml flink.yaml spring-boot-admin.yaml; do grep -q "kubectl apply -f $manifest" <<<"$all"; done
+[ "$(release_count "$all")" -eq 18 ]
+grep -q "初始化 Nacos MySQL schema" <<<"$all"
+grep -q "nacos-k8s v1.0.2 (官方 GitHub Release)" <<<"$all"
+grep -q "apache/skywalking --version 4.1.0" <<<"$all"
+grep -q "tdengine-3.5.0.tgz (官方 TDengine-Operator)" <<<"$all"
 for release in etcd openbao loki alloy velero renovate; do lacks_release "$all" "$release"; done
 
 help=$(./deploy-registry-stack.sh --help)
@@ -188,7 +194,15 @@ function kubectl { throw 'kubectl was called during dry-run' }
         Assert-True ((Get-ReleaseCount $kyverno) -eq 1) "-Kyverno should deploy exactly one release"
 
         $all = Invoke-DryRun "WithAll"
-        Assert-HasRelease $all "apisix"
+        @("mysql", "pg", "redis", "minio", "elasticsearch", "mongodb", "zookeeper", "kafka", "nacos", "apollo", "skywalking", "tdengine", "apisix", "shenyu", "prometheus", "pulsar", "jenkins", "harbor") |
+            ForEach-Object { Assert-HasRelease $all $_ }
+        @("rocketmq.yaml", "sentinel-dashboard.yaml", "shardingsphere.yaml", "dubbo-admin.yaml", "seata.yaml", "xxl-job.yaml", "flink.yaml", "spring-boot-admin.yaml") |
+            ForEach-Object { Assert-Contains $all "[DRY-RUN] kubectl apply -f $_" "-WithAll missed $_" }
+        Assert-True ((Get-ReleaseCount $all) -eq 18) "-WithAll expanded to an unexpected release set"
+        Assert-Contains $all "初始化 Nacos MySQL schema" "Nacos schema initialization is missing"
+        Assert-Contains $all "nacos-k8s v1.0.2 (官方 GitHub Release)" "Nacos must use the pinned official Chart"
+        Assert-Contains $all "apache/skywalking" "SkyWalking must use the current official Chart name"
+        Assert-Contains $all "tdengine-3.5.0.tgz (官方 TDengine-Operator)" "TDengine must use the pinned official Chart"
         @("etcd", "openbao", "loki", "alloy", "velero", "renovate") |
             ForEach-Object { Assert-LacksRelease $all $_ }
     }
