@@ -58,7 +58,7 @@ image_version() {
   component=${component//-/_}; component=${component^^}
   override=$(version_override "IMAGE_${component}")
   case "$component" in
-    MYSQL|REDIS|MINIO) ;;
+    MYSQL|REDIS|MINIO|NACOS|TDENGINE) ;;
     *) [ -n "$override" ] || override=$(version_override "$component") ;;
   esac
   [ -n "$override" ] && { printf '%s' "$override"; return 0; }
@@ -124,22 +124,6 @@ validate_version_overrides() {
       exit 1
     }
   done
-}
-
-unavailable_component() {
-  local component=$1 reason=$2
-  if [ -n "$DRY_RUN" ]; then
-    warn "$component 暂不执行：$reason"
-    return 0
-  fi
-  echo "${RED}[FATAL] $component 暂不支持自动部署：$reason${NC}" >&2
-  exit 1
-}
-
-validate_component_support() {
-  [ -n "$NACOS" ] && [ -z "$DRY_RUN" ] && unavailable_component "Nacos" "官方 Chart 需要从 nacos-k8s 仓库本地安装，当前脚本未自动下载"
-  [ -n "$TDENGINE" ] && [ -z "$DRY_RUN" ] && unavailable_component "TDengine" "仓库地址已失效，未找到可核验的官方 Helm Chart 来源"
-  return 0
 }
 
 # ── 全部组件初始 OFF ──
@@ -264,8 +248,6 @@ validate_version_overrides
 [ -n "$LOKI" ]    && MINIO=1    # Loki 使用 S3 对象存储
 [ -n "$VELERO" ]  && MINIO=1    # Velero 使用 S3 备份存储
 
-validate_component_support
-
 # ── 无参数 → 显示帮助 ──
 if [ -z "$PG$MYSQL$REDIS$MINIO$KAFKA$ES$MONGO$ZK$NACOS$ROCKETMQ$SENTINEL$SKYWALKING$APOLLO$TDENGINE$HARBOR$SHARDINGSPHERE$APISIX$SHENYU$DUBBO$SEATA$XXL_JOB$PROMETHEUS$PULSAR$FLINK$JENKINS$SBA$ETCD$OPENBAO$LOKI$VELERO$RENOVATE" ]; then
   echo "请指定要部署的组件，例如: bash $0 --mysql"
@@ -294,6 +276,82 @@ hlm() {
     exit 1
   }
   ok "$name"; return 0
+}
+
+official_chart() {
+  local component=$1 version=$2 cache_dir archive chart_dir url tag top_dir
+  cache_dir="${BEGGAR_CHART_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/beggar/charts}"
+  mkdir -p "$cache_dir"
+  case "$component" in
+    nacos)
+      tag="$version"
+      [[ "$tag" == v* ]] || tag="v$tag"
+      archive="$cache_dir/nacos-k8s-$tag.tar.gz"
+      url="https://github.com/nacos-group/nacos-k8s/archive/refs/tags/$tag.tar.gz"
+      [ -s "$archive" ] || curl -fsSL --retry 3 "$url" -o "$archive"
+      top_dir=$(tar -tzf "$archive" | awk -F/ 'NR == 1 { print $1; exit }')
+      [ -n "$top_dir" ] || { echo "Nacos Chart 压缩包为空: $archive" >&2; return 1; }
+      chart_dir="$cache_dir/$top_dir/helm"
+      if [ ! -d "$chart_dir" ]; then
+        tar -xzf "$archive" -C "$cache_dir"
+      fi
+      [ -d "$chart_dir" ] || { echo "Nacos Chart 目录不存在: $chart_dir" >&2; return 1; }
+      printf '%s' "$chart_dir"
+      ;;
+    tdengine)
+      archive="$cache_dir/tdengine-$version.tgz"
+      url="https://raw.githubusercontent.com/taosdata/TDengine-Operator/003111e2bb4a1503fbcf760159062017def15a0b/helm/tdengine-$version.tgz"
+      [ -s "$archive" ] || curl -fsSL --retry 3 "$url" -o "$archive"
+      printf '%s' "$archive"
+      ;;
+    *)
+      echo "未知官方 Chart: $component" >&2
+      return 1
+      ;;
+  esac
+}
+
+official_hlm() {
+  local component=$1 name=$2 values=$3; shift 3
+  local version chart
+  version=$(component_version "$component")
+  if [ -n "$DRY_RUN" ]; then
+    case "$component" in
+      nacos) chart="nacos-k8s v$version (官方 GitHub Release)" ;;
+      tdengine) chart="tdengine-$version.tgz (官方 TDengine-Operator)" ;;
+    esac
+    echo -e "  ${GRAY}[DRY-RUN] helm upgrade --install $name $chart${version:+ --version $version}${NC}"
+    return 0
+  fi
+  chart=$(official_chart "$component" "$version")
+  local args=(upgrade --install "$name" "$chart" --namespace "$NAMESPACE" --wait --timeout 10m --values "$values")
+  [ $# -gt 0 ] && args+=("$@")
+  local out
+  out=$(helm "${args[@]}" 2>&1) || {
+    warn "$name 部署异常"; echo "$out" | while IFS= read -r l; do echo -e "    ${GRAY}$l${NC}"; done
+    exit 1
+  }
+  ok "$name"; return 0
+}
+
+initialize_nacos_database() {
+  local mysql_pod schema_url
+  schema_url="https://raw.githubusercontent.com/nacos-group/nacos-k8s/v1.0.2/operator/config/sql/nacos-mysql.sql"
+  if [ -n "$DRY_RUN" ]; then
+    echo -e "  ${GRAY}[DRY-RUN] 初始化 Nacos MySQL schema: $schema_url${NC}"
+    return 0
+  fi
+  mysql_pod=$(kubectl get pod -n "$NAMESPACE" -l app.kubernetes.io/component=primary -o jsonpath='{.items[0].metadata.name}')
+  [ -n "$mysql_pod" ] || { echo "未找到 MySQL primary Pod，无法初始化 Nacos 数据库" >&2; exit 1; }
+  kubectl exec -n "$NAMESPACE" "$mysql_pod" -- mysql -uroot -pmysqlroot123 -e \
+    'CREATE DATABASE IF NOT EXISTS nacos CHARACTER SET utf8mb4;' >/dev/null
+  if kubectl exec -n "$NAMESPACE" "$mysql_pod" -- mysql -N -uroot -pmysqlroot123 -e \
+    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='nacos' AND table_name='config_info';" | grep -qx '1'; then
+    info "Nacos MySQL schema 已存在"
+    return 0
+  fi
+  curl -fsSL --retry 3 "$schema_url" | \
+    kubectl exec -i -n "$NAMESPACE" "$mysql_pod" -- mysql -uroot -pmysqlroot123 nacos
 }
 
 kube_apply() {
@@ -441,14 +499,9 @@ fi
 
 # -- 注册 / 配置 --
 [ -n "$NACOS" ] && step "--- Nacos 3-node ---" && {
-  unavailable_component "Nacos" "官方 Chart 需要从 nacos-k8s 仓库本地安装，当前脚本未自动下载"
-  if [ -n "$DRY_RUN" ]; then
-    :
-  else
-    exec_pod "app.kubernetes.io/component=primary" \
-      "mysql -uroot -pmysqlroot123 -e 'CREATE DATABASE IF NOT EXISTS nacos CHARACTER SET utf8mb4;'" || true
-    hlm "nacos" "nacos-group/nacos" "$CFG/nacos-values.yaml"
-  fi
+  initialize_nacos_database
+  official_hlm "nacos" "nacos" "$CFG/nacos-values.yaml" \
+    --set "nacos.image.tag=$(image_version NACOS)"
 }
 
 [ -n "$APOLLO" ] && step "--- Apollo 3-node ---" && {
@@ -463,7 +516,7 @@ fi
 [ -n "$SENTINEL" ]   && step "--- Sentinel Dashboard ---" && \
   kube_apply "$CFG/manifests/sentinel-dashboard.yaml"
 [ -n "$SKYWALKING" ] && step "--- SkyWalking 3-node ---" && \
-  hlm "skywalking" "apache/skywalking-helm" "$CFG/skywalking-values.yaml"
+  hlm "skywalking" "apache/skywalking" "$CFG/skywalking-values.yaml"
 
 # -- 密钥管理 --
 [ -n "$OPENBAO" ] && step "--- OpenBao 3-node Raft ---" && \
@@ -477,7 +530,8 @@ fi
 
 # -- 时序 --
 [ -n "$TDENGINE" ] && step "--- TDengine 3-node ---" && \
-  unavailable_component "TDengine" "仓库地址已失效，未找到可核验的官方 Helm Chart 来源"
+  official_hlm "tdengine" "tdengine" "$CFG/tdengine-values.yaml" \
+    --set "image.server=tdengine/tdengine:$(image_version TDENGINE)"
 
 # -- 分库 --
 [ -n "$SHARDINGSPHERE" ] && step "--- ShardingSphere-Proxy 多主分库 ---" && \

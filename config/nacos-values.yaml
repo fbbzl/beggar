@@ -1,35 +1,50 @@
-# 3-node Nacos cluster
-# Uses external MySQL (deployed by registry-stack)
+# Official nacos-k8s v1.0.2 chart values.
+global:
+  mode: cluster
 
-replicaCount: 3
-image:
-  repository: nacos/nacos-server
-  tag: "2.4.0"
-
-serverMode: cluster
-
-db:
-  master:
-    host: "mysql-mysql-primary"
-    port: 3306
-    username: "root"
-    password: "mysqlroot123"
-  slave:
-    host: "mysql-mysql-primary"
-    port: 3306
-    username: "root"
-    password: "mysqlroot123"
-  dbName: "nacos"
-  param: "characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useSSL=false"
-
-# Generate unique peer nodes for cluster membership
-cluster:
-  member:
-    list: "nacos-0.nacos-headless:8848,nacos-1.nacos-headless:8848,nacos-2.nacos-headless:8848"
+nacos:
+  image:
+    repository: nacos/nacos-server
+    tag: "v3.0.1"
+    pullPolicy: IfNotPresent
+  plugin:
+    enable: true
+    image:
+      repository: nacos/nacos-peer-finder-plugin
+      tag: "1.1"
+      pullPolicy: IfNotPresent
+  replicaCount: 3
+  podManagementPolicy: Parallel
+  domainName: cluster.local
+  preferHostMode: hostname
+  serverPort: 8848
+  consolePort: 8080
+  mcpPort: 9080
+  authToken: nil
+  identityKey: nil
+  identityValue: nil
+  storage:
+    type: mysql
+    db:
+      host: "mysql-mysql-primary"
+      name: "nacos"
+      port: 3306
+      username: "root"
+      password: "mysqlroot123"
+      param: "characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useSSL=false"
 
 persistence:
   enabled: true
-  size: 5Gi
+  data:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 5Gi
+
+service:
+  type: ClusterIP
+  port: 8848
 
 resources:
   requests:

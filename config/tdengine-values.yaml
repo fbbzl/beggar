@@ -1,38 +1,49 @@
-# 3-node TDengine cluster
-# Minimal available cluster with mnode replication
-
-replicaCount: 3
+# Official TDengine-Operator 3.0 chart values.
+name: "tdengine"
 
 image:
-  tag: "3.3.0.1"
+  repository: ""
+  server: "tdengine/tdengine:3.3.6.9"
 
-storage:
-  data:
-    size: 20Gi
-  log:
-    size: 5Gi
-
-resources:
-  requests:
-    memory: 256Mi
-    cpu: 100m
-  limits:
-    memory: 1Gi
-    cpu: 500m
-
-config:
-  # 3 mnode for HA
-  numOfMnodes: 3
-  # Minimum quorum
-  replication: 3
-  # Support time range queries
-  timezone: "Asia/Shanghai"
-  # Cluster configuration
-  firstEp: "tdengine-0.tdengine-headless:6030"
-  fqdn: "tdengine-0.tdengine-headless"
-  serverPort: 6030
-  supportVnodes: 128
+timezone: "Asia/Shanghai"
 
 service:
   type: ClusterIP
-  headless: true
+services:
+  server:
+    type: ClusterIP
+    replica: 3
+    ports:
+      tcp: [6041, 6030, 6060]
+      udp: []
+    volumes:
+      - name: tier0
+        mountPath: /data/taos0/
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+      - name: tier1
+        mountPath: /data/taos1/
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+      - name: tier2
+        mountPath: /data/taos2/
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+    environment:
+      TAOS_DEBUG_FLAG: "131"
+    files:
+      - name: cfg
+        mountPath: /etc/taos/taos.cfg
+        content: |
+          dataDir /data/taos0/  0 1
+          dataDir /data/taos1/  1 0
+          dataDir /data/taos2/  2 0

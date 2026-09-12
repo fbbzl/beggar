@@ -59,6 +59,34 @@ grep -q registry "$log_file"
 grep -Fqx 'versions=mysql=14.0.3' "$log_file"
 '
 
+check_case success 'interactive categories include Nacos and TDengine' '
+script="'"$script"'"
+real_bash=$(command -v bash)
+stub_dir=$(mktemp -d)
+log_file="$stub_dir/calls.log"
+cat > "$stub_dir/bash" <<EOF
+#!$real_bash
+set -euo pipefail
+case "\${1:-}" in
+  -c|-lc) exec "$real_bash" "\$@" ;;
+  *deploy-registry-stack.sh)
+    printf "%s\\n" "\$*" >>"$log_file"
+    exit 0 ;;
+  *) exec "$real_bash" "\$@" ;;
+esac
+EOF
+chmod +x "$stub_dir/bash"
+PATH="$stub_dir:$PATH" \
+INSTALL_TARGET=middleware-only \
+DEPLOY_SELECTION=1,3 \
+ASSUME_YES=1 \
+DRY_RUN=1 \
+BEGGAR_KUBECONFIG="$stub_dir/config-beggar" \
+"$real_bash" "$script" >/dev/null
+grep -Fq -- '--tdengine' "$log_file"
+grep -Fq -- '--nacos' "$log_file"
+'
+
 check_case success 'middleware-only can deploy platform-all' '
 script="'"$script"'"
 real_bash=$(command -v bash)

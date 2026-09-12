@@ -11,6 +11,11 @@ grep -Fq -- '--version 12.3.5' <<< "$output"
 printf 'PASS: default chart version and on-demand repo\n'
 passed=$((passed + 1))
 
+output=$(DRY_RUN=1 bash "$script" --skywalking)
+grep -Fq 'helm upgrade --install skywalking apache/skywalking --version 4.1.0' <<< "$output"
+printf 'PASS: SkyWalking chart name and version\n'
+passed=$((passed + 1))
+
 output=$(DRY_RUN=1 bash "$script" --mysql --version-overrides mysql=14.0.3)
 grep -Fq -- '--version 14.0.3' <<< "$output"
 printf 'PASS: chart version override\n'
@@ -40,9 +45,10 @@ printf 'PASS: unsafe version override rejected\n'
 passed=$((passed + 1))
 
 output=$(DRY_RUN=1 bash "$script" --nacos --tdengine)
-grep -Fq 'Nacos 暂不执行' <<< "$output"
-grep -Fq 'TDengine 暂不执行' <<< "$output"
-printf 'PASS: unavailable chart sources are explicit\n'
+grep -Fq '初始化 Nacos MySQL schema: https://raw.githubusercontent.com/nacos-group/nacos-k8s/v1.0.2/operator/config/sql/nacos-mysql.sql' <<< "$output"
+grep -Fq 'helm upgrade --install nacos nacos-k8s v1.0.2 (官方 GitHub Release) --version 1.0.2' <<< "$output"
+grep -Fq 'helm upgrade --install tdengine tdengine-3.5.0.tgz (官方 TDengine-Operator) --version 3.5.0' <<< "$output"
+printf 'PASS: Nacos and TDengine use pinned official charts\n'
 passed=$((passed + 1))
 
 printf '%s version cases passed.\n' "$passed"

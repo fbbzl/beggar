@@ -117,9 +117,9 @@ selection_to_flags() {
     token="$(trim "$token")"
     [ -n "$token" ] || continue
     case "$token" in
-      1) append_flags --mysql --pg --redis --minio ;;
+      1) append_flags --mysql --pg --redis --minio --tdengine ;;
       2) append_flags --kafka --es --mongo --zk --etcd --rocketmq --pulsar --flink ;;
-      3) append_flags --apollo --shardingsphere --xxl-job ;;
+      3) append_flags --nacos --apollo --shardingsphere --xxl-job ;;
       4) append_flags --apisix --shenyu --dubbo --seata --sentinel --skywalking --harbor --prometheus --jenkins --spring-boot-admin ;;
       5) append_flags --cert-manager --argocd --kyverno --openbao --loki --velero --renovate ;;
       6) DEPLOY_FLAGS_LIST=(--all) ; return 0 ;;
@@ -134,9 +134,9 @@ selection_to_flags() {
 show_menu() {
   cat <<'EOF'
 部署范围：
-  1) 数据库 / 基础存储（MySQL, PostgreSQL, Redis, MinIO；TDengine 暂不可自动部署）
+  1) 数据库 / 基础存储（MySQL, PostgreSQL, Redis, MinIO, TDengine）
   2) 消息 / 搜索 / 协调（Kafka, Elasticsearch, MongoDB, ZooKeeper, etcd, RocketMQ, Pulsar, Flink）
-  3) 注册 / 配置 / 分库（Apollo, ShardingSphere, XXL-JOB；Nacos 暂不可自动部署）
+  3) 注册 / 配置 / 分库（Nacos, Apollo, ShardingSphere, XXL-JOB）
   4) 网关 / 治理 / 监控（APISIX, ShenYu, Dubbo, Seata, Sentinel, SkyWalking, Harbor, Prometheus, Jenkins, Spring Boot Admin）
   5) 平台工具（cert-manager, Argo CD, Kyverno, OpenBao, Loki, Velero, Renovate）
   6) 全量（--all）

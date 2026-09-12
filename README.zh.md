@@ -39,7 +39,7 @@ bash bootstrap-linux.sh
 # 在上述集群上增加一个组件，先观察效果
 bash bootstrap-linux.sh --minio
 
-# 明确需要全量时执行（资源需求取决于所选组件；Nacos、TDengine 当前会在前置检查拒绝）
+# 明确需要全量时执行（资源需求取决于所选组件）
 bash bootstrap-linux.sh --all
 
 # 后续直接使用中间件脚本时，显式选择项目集群
@@ -65,7 +65,7 @@ BEGGAR_VERSION_OVERRIDES=mysql=14.0.3,redis=28.0.15,flink=1.20.2 \
 
 默认版本清单位于 `config/versions.env`。MySQL 默认选择 8.4 对应的 Bitnami Chart `12.3.5`；需要 MySQL 9.4 时可覆盖为 Chart `14.0.3`。版本覆盖只接受安全的版本字符，未知组件、重复组件和非法值会在部署前拒绝。纯原生清单可直接使用 `flink=1.20.2`，也支持 `image-flink=1.20.2`；与 Helm 组件同名的原生镜像使用 `image-mysql=8.4`、`image-redis=7.4` 或 `image-minio=RELEASE.2025-07-23T15-54-02Z`，可与对应的 Chart 覆盖同时传入。
 
-Nacos 当前官方推荐从 `nacos-group/nacos-k8s` 的本地 Chart 安装，TDengine 的旧 Helm 仓库也已失效；在这两个官方来源接入前，dry-run 会明确提示，真实部署会在前置检查阶段拒绝，不会留下半套安装。
+Nacos 和 TDengine 都可通过交互安装器一键部署。Nacos 使用官方 `nacos-k8s v1.0.2`，会自动初始化 MySQL schema；TDengine 使用官方 `TDengine-Operator` 的 `tdengine-3.5.0.tgz`。首次部署时脚本会下载固定版本 Chart 到本机缓存，随后执行 Helm 安装。
 
 以下为**已具备工具链和目标集群 kubeconfig**时的独立入口：
 
@@ -168,12 +168,12 @@ Windows 基座安装将在 Linux 效果确认后补齐；以下命令仍要求�
 | 6 | 🔍 **Elasticsearch** | `--es` | `-Es` | 3 | Elastic | 搜索 + 日志集群 |
 | 7 | 🍃 **MongoDB** | `--mongo` | `-Mongo` | 3 | Bitnami | ReplicaSet 副本集 |
 | 8 | 🦎 **ZooKeeper** | `--zk` | `-Zk` | 3 | Bitnami | 分布式协调服务 |
-| 9 | 🌐 **Nacos** | `--nacos` | `-Nacos` | 3 | Nacos 官方 | 暂不自动部署：官方 Chart 需本地安装 |
+| 9 | 🌐 **Nacos** | `--nacos` | `-Nacos` | 3 | Nacos 官方 Chart | 服务注册与配置中心（自动初始化 MySQL） |
 | 10 | 🚀 **RocketMQ** | `--rocketmq` | `-RocketMQ` | 6 | Apache | 3 NameServer + 3 Broker |
 | 11 | ⚡ **Sentinel** | `--sentinel` | `-Sentinel` | 2 | Sentinel 官方 | 流量治理可视化控制台 |
 | 12 | 📈 **SkyWalking** | `--skywalking` | `-Skywalking` | 3 | Apache | 分布式链路追踪 APM |
 | 13 | ⚙️ **Apollo** | `--apollo` | `-Apollo` | 3 | Apollo 官方 | 分布式配置中心 |
-| 14 | ⏱ **TDengine** | `--tdengine` | `-Tdengine` | 3 | TDengine | 暂不自动部署：官方 Helm 来源待接入 |
+| 14 | ⏱ **TDengine** | `--tdengine` | `-Tdengine` | 3 | TDengine 官方 Chart | 时序数据库三节点集群 |
 | 15 | 🔀 **ShardingSphere** | `--shardingsphere` | `-Shardingsphere` | 2 | Apache | MySQL 多主分库 |
 | 16 | 🏛 **Harbor** | `--harbor` | `-Harbor` | - | Harbor CNCF | 企业级镜像仓库 |
 | 17 | 🛣️ **APISIX HA** | `--apisix` | `-Apisix` | 2+3 | Apache | 最小高可用 API 网关 + etcd |
